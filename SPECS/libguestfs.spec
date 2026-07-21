@@ -1,5 +1,31 @@
 %global _hardened_build 1
 
+# XCP-ng: Disable some features to avoid importing unsupported packages
+%define xcpng 8
+%bcond_with erlang  # Disabled
+%bcond_with java  # Disabled
+%bcond_with ocaml  # Disabled
+%bcond_without python  # Enabled
+%bcond_with perl  # Disabled
+%bcond_with php  # Disabled
+%bcond_with ruby  # Disabled
+
+%bcond_with daemon  # Disabled
+%if %{without daemon}
+%bcond_with appliance  # Disabled
+%bcond_with tests  # Disabled
+%else
+%bcond_without tests  # Enabled
+%endif
+%bcond_with libvirt  # Disabled
+
+%if 0%{?xcpng}
+# XCP-ng's qemu can't be used because qemu-img is part of blktab, so forked qemu-kvm is used (like upstream)
+%define qemu_img_requires qemu-img qemu-kvm
+%else
+%define qemu_img_requires /usr/bin/qemu-img
+%endif
+
 # Trim older changelog entries.
 # https://lists.fedoraproject.org/pipermail/devel/2013-April/thread.html#181627
 %global _changelog_trimtime %(date +%s -d "2 years ago")
@@ -7,14 +33,16 @@
 # Verify tarball signature with GPGv2 (only possible for stable branches).
 %global verify_tarball_signature 1
 
+%if %{with perl}
 # Filter perl provides
 %{?perl_default_filter}
+%endif
 
 Summary:       Access and modify virtual machine disk images
 Name:          libguestfs
 Epoch:         1
 Version:       1.36.10
-Release:       6%{?dist}.2
+Release:       6%{?dist}.2.1
 License:       LGPLv2+
 
 # Source and patches.
@@ -116,6 +144,10 @@ Patch0080:     0080-launch-direct-Omit-locking-option-for-non-file-disks.patch
 Patch0081:     0081-launch-direct-Use-old-style-file-and-format-paramete.patch
 Patch0082:     0082-customize-allow-missing-SELINUXTYPE-in-SELinux-confi.patch
 
+# XCP-ng patches to enable rebuild
+Patch1000:     1000-build-Add-check-for-gtkdoc-in-configure.ac.patch
+Patch1001:     1001-build-Make-ocaml-optional.patch
+
 # Use git for patch management.
 BuildRequires: git
 
@@ -128,8 +160,10 @@ Source4:       README-replacement.in
 # Guestfish colour prompts.
 Source5:       guestfish.sh
 
+%if %{with appliance}
 # Used to build the supermin appliance in Koji.
 Source6:       yum.conf.in
+%endif
 
 # Keyring used to verify tarball signature.
 %if 0%{verify_tarball_signature}
@@ -149,12 +183,19 @@ Source99:      copy-patches.sh
 
 # Basic build requirements for the library and virt tools.
 BuildRequires: gcc
+%if %{with appliance}
 BuildRequires: supermin5-devel >= 5.1.16-2
+%endif
 BuildRequires: hivex-devel >= 1.3.10-5.8.el7
+%if %{with perl}
 BuildRequires: perl(Pod::Simple)
 BuildRequires: perl(Pod::Man)
 BuildRequires: /usr/bin/pod2text
+%endif
+%if 0%{!?xcpng}
+# XCP-ng does not need translated manpage (in jp) for this build package
 BuildRequires: po4a
+%endif
 BuildRequires: augeas-devel
 BuildRequires: readline-devel
 BuildRequires: genisoimage
@@ -166,7 +207,9 @@ BuildRequires: libselinux-devel
 BuildRequires: fuse, fuse-devel
 BuildRequires: pcre-devel
 BuildRequires: file-devel
+%if %{with libvirt}
 BuildRequires: libvirt-devel
+%endif
 BuildRequires: gperf
 BuildRequires: flex
 BuildRequires: bison
@@ -178,10 +221,15 @@ BuildRequires: zip
 BuildRequires: unzip
 BuildRequires: systemd-units
 BuildRequires: netpbm-progs
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package to deal with MS icons
 BuildRequires: icoutils
+%endif
 %ifnarch aarch64 %{power64} s390x
 # RHBZ#1177910
+%if %{with libvirt}
 BuildRequires: libvirt-daemon-kvm
+%endif
 %endif
 #BuildRequires: perl(Expect)
 BuildRequires: libacl-devel
@@ -194,9 +242,13 @@ BuildRequires: /usr/bin/ping
 BuildRequires: /usr/bin/wget
 BuildRequires: curl
 BuildRequires: xz
+%if %{with gtk3}
 BuildRequires: gtk3-devel
+%endif
+BuildRequires: gtk-doc
+BuildRequires: autoconf
 BuildRequires: dbus-devel
-BuildRequires: /usr/bin/qemu-img
+BuildRequires: %{qemu_img_requires}
 BuildRequires: perl(Win::Hivex)
 BuildRequires: perl(Win::Hivex::Regedit)
 %if 0%{verify_tarball_signature}
@@ -205,38 +257,58 @@ BuildRequires: gnupg2
 
 # For language bindings.
 # Build using OCaml with fix for CVE-2015-8869.
+%if %{with ocaml}
 BuildRequires: ocaml >= 4.01.0-22.7.el7
 BuildRequires: ocaml-ocamldoc
 # Make sure to get the performance fix for findlib.
 BuildRequires: ocaml-findlib-devel >= 1.3.3-7.el7
 BuildRequires: ocaml-gettext-devel
+%endif
 BuildRequires: lua
 BuildRequires: lua-devel
+%if %{with perl}
 BuildRequires: perl-devel
 BuildRequires: perl-macros
+%if %{with libvirt}
 BuildRequires: perl(Sys::Virt)
+%endif
 BuildRequires: perl(Test::More)
 BuildRequires: perl(Test::Pod) >= 1.00
 BuildRequires: perl(Test::Pod::Coverage) >= 1.00
 BuildRequires: perl(Module::Build)
 BuildRequires: perl(ExtUtils::CBuilder)
 BuildRequires: perl(Locale::TextDomain)
+%endif
+%if %{with python}
 BuildRequires: python-devel
+%if %{with libvirt}
 BuildRequires: libvirt-python
+%endif
+%endif
+%if %{with ruby}
 BuildRequires: ruby-devel
 BuildRequires: rubygem-rake
 BuildRequires: rubygem(minitest)
 #BuildRequires: rubygem(test-unit)
 BuildRequires: ruby-irb
+%endif
+%if %{with java}
 BuildRequires: java-1.7.0-openjdk
 BuildRequires: java-1.7.0-openjdk-devel
 BuildRequires: jpackage-utils
-#BuildRequires: php-devel
-#BuildRequires: erlang-erts
-#BuildRequires: erlang-erl_interface
+%endif
+%if %{with php}
+BuildRequires: php-devel
+%endif
+%if %{with erlang}
+BuildRequires: erlang-erts
+BuildRequires: erlang-erl_interface
+%endif
+%if %{with gobject}
 BuildRequires: glib2-devel
 BuildRequires: gobject-introspection-devel
 BuildRequires: gjs
+%endif
 #%ifarch %{golang_arches}
 #BuildRequires: golang
 #%endif
@@ -247,16 +319,42 @@ BuildRequires: gjs
 #   for f in `cat appliance/packagelist`; do echo $f; done | sort -u
 # However you have to edit the list down to packages which exist in
 # current RHEL, since supermin ignores non-existent packages.
-BuildRequires: acl attr augeas-libs bash binutils btrfs-progs bzip2 coreutils cpio cryptsetup curl diffutils dosfstools e2fsprogs file findutils gawk gdisk genisoimage grep gzip hivex iproute iputils kernel kmod kpartx less libcap libselinux libxml2 lsof lsscsi lvm2 lzop mdadm openssh-clients parted pciutils pcre policycoreutils procps psmisc qemu-img rsync scrub sed squashfs-tools strace systemd tar udev util-linux vim-minimal which xfsprogs xz yajl
+BuildRequires: acl attr augeas-libs bash binutils
+
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package yet
+BuildRequires: btrfs-progs
+%endif
+BuildRequires: bzip2 coreutils cpio cryptsetup curl diffutils dosfstools e2fsprogs file findutils gawk gdisk genisoimage grep gzip hivex iproute iputils kernel kmod kpartx less libcap libselinux libxml2 lsof lsscsi lvm2
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package yet: Real-time file compressor
+BuildRequires: lzop
+%endif
+BuildRequires: mdadm openssh-clients parted pciutils pcre policycoreutils procps psmisc qemu-img rsync
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package yet:  Disk scrubbing program
+BuildRequires: scrub
+%endif
+BuildRequires: sed
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package yet
+BuildRequires: squashfs-tools
+%endif
+BuildRequires: strace systemd tar udev util-linux vim-minimal which xfsprogs xz yajl
 %ifarch x86_64
+%if 0%{!?xcpng}
+# XCP-ng does not support this optional package yet
 BuildRequires: gfs2-utils
+%endif
 %endif
 %ifarch %{ix86} x86_64
 BuildRequires: syslinux syslinux-extlinux
 %endif
 
+%if %{with appliance}
 # For building the appliance.
 Requires:      supermin5 >= 5.1.16-2
+%endif
 
 # The daemon dependencies are not included automatically, because it
 # is buried inside the appliance, so list them here.
@@ -285,11 +383,13 @@ Requires:      osinfo-db
 Requires:      fuse
 
 # For core disk-create API.
-Requires:      /usr/bin/qemu-img
+Requires:      %{qemu_img_requires}
 
+%if %{with libvirt}
 # For libvirt backend.
 # RHBZ#1500870, RHBZ#1501239
 Requires:      libvirt-daemon-kvm >= 3.9.0-1
+%endif
 %ifarch aarch64
 Requires:      AAVMF
 %endif
@@ -663,6 +763,7 @@ Install this package if you want intelligent bash tab-completion
 for guestfish, guestmount and various virt-* tools.
 
 
+%if %{with ocaml}
 %package -n ocaml-%{name}
 Summary:       OCaml bindings for %{name}
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -683,8 +784,10 @@ Requires:      ocaml-%{name} = %{epoch}:%{version}-%{release}
 %description -n ocaml-%{name}-devel
 ocaml-%{name}-devel contains development libraries
 required to use the OCaml bindings for %{name}.
+%endif
 
 
+%if %{with perl}
 %package -n perl-Sys-Guestfs
 Summary:       Perl bindings for %{name} (Sys::Guestfs)
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -693,8 +796,10 @@ Requires:      perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $versio
 
 %description -n perl-Sys-Guestfs
 perl-Sys-Guestfs contains Perl bindings for %{name} (Sys::Guestfs).
+%endif
 
 
+%if %{with python}
 %package -n python-%{name}
 Summary:       Python bindings for %{name}
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -704,8 +809,10 @@ Requires:      %{name} = %{epoch}:%{version}-%{release}
 
 %description -n python-%{name}
 python-%{name} contains Python bindings for %{name}.
+%endif
 
 
+%if %{with ruby}
 %package -n ruby-%{name}
 Summary:       Ruby bindings for %{name}
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -715,8 +822,10 @@ Provides:      ruby(guestfs) = %{version}
 
 %description -n ruby-%{name}
 ruby-%{name} contains Ruby bindings for %{name}.
+%endif
 
 
+%if %{with java}
 %package java
 Summary:       Java bindings for %{name}
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -751,6 +860,7 @@ Requires:      jpackage-utils
 
 %description javadoc
 %{name}-javadoc contains the Java documentation for %{name}.
+%endif
 
 
 %package -n lua-guestfs
@@ -762,6 +872,7 @@ Requires:      lua
 lua-guestfs contains Lua bindings for %{name}.
 
 
+%if %{with gobject}
 %package gobject
 Summary:       GObject bindings for %{name}
 Requires:      %{name} = %{epoch}:%{version}-%{release}
@@ -793,8 +904,11 @@ Requires:      %{name}-gobject-devel = %{epoch}:%{version}-%{release}
 %description gobject-doc
 %{name}-gobject-doc contains documentation for
 %{name} GObject bindings.
+%endif
 
 
+%if 0%{!?xcpng}
+# XCP-ng does not need manpages since this package is not supported
 %package man-pages-ja
 Summary:       Japanese (ja) man pages for %{name}
 BuildArch:     noarch
@@ -813,6 +927,7 @@ Requires:      %{name} = %{epoch}:%{version}-%{release}
 %description man-pages-uk
 %{name}-man-pages-uk contains Ukrainian (uk) man pages
 for %{name}.
+%endif
 
 
 %prep
@@ -850,6 +965,7 @@ sed 's/@VERSION@/%{version}/g' < %{SOURCE4} > README
 
 
 %build
+%if %{with appliance}
 # Test if network is available.
 ip addr list ||:
 ip route list ||:
@@ -864,6 +980,7 @@ else
   sed -e "s|@PWD@|$(pwd)|" %{SOURCE6} > yum.conf
   extra=--with-supermin-packager-config=$(pwd)/yum.conf
 fi
+%endif
 
 # aarch64/ppc64/ppc64le doesn't yet have a working qemu available in
 # brew, and for that reason we have to hack things here.  See:
@@ -874,17 +991,26 @@ export vmchannel_test=no
 export QEMU=/usr/libexec/qemu-kvm
 %endif
 
+%if %{with appliance}
 # In RHEL >= 7.1, supermin 5 has a different name:
 export SUPERMIN=%{_bindir}/supermin5
+%endif
 
+# XCP-ng uses "direct" backend because "libvirt" is not supported yet, optional features disabled too
 %{configure} \
-  --with-default-backend=libvirt \
-  --with-extra="rhel=%{rhel},release=%{release},libvirt" \
+  --with-default-backend=%{?with_libvirt:libvirt}%{!?with_libvirt:direct} \
+  --with-extra="rhel=%{rhel},release=%{release},%{?with_libvirt:libvirt}" \
   --with-qemu="qemu-kvm qemu-system-%{_build_arch} qemu" \
   --disable-php \
   --disable-haskell \
   --disable-erlang \
   --disable-golang \
+  --%{?with_ocaml:enable}%{!?with_ocaml:disable}-ocaml \
+  --%{?with_python:enable}%{!?with_python:disable}-python \
+  --%{?with_daemon:enable}%{!?with_daemon:disable}-daemon \
+  --%{?with_appliance:enable}%{!?with_appliance:disable}-appliance \
+  --%{?with_libvirt:with}%{!?with_libvirt:without}-libvirt \
+  --%{?with_gobject:enable}%{!?with_gobject:disable}-gobject \
   $extra
 
 # Building index-parse.c by hand works around a race condition in the
@@ -899,6 +1025,7 @@ make V=1 INSTALLDIRS=vendor %{?_smp_mflags}
 
 %check
 
+%if %{with tests}
 # Can't test on aarch64 or ppc64/ppc64le yet because we don't have
 # a working qemu available in brew.
 %ifnarch aarch64 %{power64} s390x
@@ -921,6 +1048,7 @@ if ! make quickcheck QUICKCHECK_TEST_TOOL_ARGS="-t 1200"; then
 fi
 
 %endif
+%endif
 
 
 %install
@@ -928,6 +1056,15 @@ fi
 # included in the -devel subpackage, compress it to reduce
 # installation size.
 gzip -9 ChangeLog
+
+%if %{without ocaml}
+# Prevent failure: No rule to make target `../builder/index-scan.c', needed by `libguestfs.pot'.  Stop.
+# This file is generated when builder is built, but will not without ocaml, so let's skip it
+# (and process other not builded files and modules, see HAVE_OCAML in Makefile.am)
+sed \
+    -e '/builder\/index-scan\.c/d' \
+    -i po/POTFILES
+%endif
 
 # 'INSTALLDIRS' ensures that Perl and Ruby libs are installed in the
 # vendor dir not the site dir.
@@ -945,6 +1082,7 @@ find $RPM_BUILD_ROOT -name .packlist -delete
 find $RPM_BUILD_ROOT -name '*.bs' -delete
 find $RPM_BUILD_ROOT -name 'bindtests.pl' -delete
 
+%if %{with libvirt}
 # Remove obsolete binaries (RHBZ#947438).
 rm $RPM_BUILD_ROOT%{_bindir}/virt-list-filesystems
 rm $RPM_BUILD_ROOT%{_bindir}/virt-list-partitions
@@ -952,17 +1090,21 @@ rm $RPM_BUILD_ROOT%{_bindir}/virt-tar
 rm $RPM_BUILD_ROOT%{_mandir}/man1/virt-list-filesystems.1*
 rm $RPM_BUILD_ROOT%{_mandir}/man1/virt-list-partitions.1*
 rm $RPM_BUILD_ROOT%{_mandir}/man1/virt-tar.1*
+%endif
 
+%if %{with java}
 # Don't use versioned jar file (RHBZ#1022133).
 # See: https://bugzilla.redhat.com/show_bug.cgi?id=1022184#c4
 mv $RPM_BUILD_ROOT%{_datadir}/java/%{name}-%{version}.jar \
   $RPM_BUILD_ROOT%{_datadir}/java/%{name}.jar
+%endif
 
 # Move installed documentation back to the source directory so
 # we can install it using a %%doc rule.
 mv $RPM_BUILD_ROOT%{_docdir}/libguestfs installed-docs
 gzip --best installed-docs/*.xml
 
+%if %{with appliance}
 # Split up the monolithic packages file in the supermin appliance so
 # we can install dependencies in subpackages.
 pushd $RPM_BUILD_ROOT%{_libdir}/guestfs/supermin.d
@@ -1002,15 +1144,19 @@ pushd $RPM_BUILD_ROOT%{_libdir}/guestfs/supermin.d
 sed 's/^kernel-rt$/kernel/' < packages > packages-t
 mv packages-t packages
 popd
+%endif
 
 # Guestfish colour prompts.
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/profile.d
 install -m 0644 %{SOURCE5} $RPM_BUILD_ROOT%{_sysconfdir}/profile.d
 
+# Virt-tools package depends on ocaml
+%if %{with ocaml}
 # Virt-tools data directory.
 mkdir -p $RPM_BUILD_ROOT%{_datadir}/virt-tools
 cp %{SOURCE96} $RPM_BUILD_ROOT%{_datadir}/virt-tools/rhsrvany.exe
 cp %{SOURCE97} $RPM_BUILD_ROOT%{_datadir}/virt-tools/rhev-apt.exe
+%endif
 
 %ifarch %{power64} s390x
 # We don't ship virt-v2v on POWER (RHBZ#1287826).
@@ -1031,9 +1177,11 @@ rm -rf $RPM_BUILD_ROOT%{_libdir}/ocaml/stublibs/dllv2v_test_harness*
 rm -f $RPM_BUILD_ROOT%{_mandir}/man1/virt-v2v-test-harness.1*
 
 %ifnarch %{power64} s390x
+%if %{with libvirt}
 # Delete kiwi tools.
 rm $RPM_BUILD_ROOT%{_bindir}/virt-p2v-make-kiwi
 rm $RPM_BUILD_ROOT%{_mandir}/man1/virt-p2v-make-kiwi.1*
+%endif
 %endif
 
 # Remove the .gitignore file from ocaml/html which will be copied to docdir.
@@ -1057,16 +1205,20 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %postun -p /sbin/ldconfig
 
+%if %{with java}
 %post java -p /sbin/ldconfig
 
 %postun java -p /sbin/ldconfig
+%endif
 
 
 %files -f %{name}.lang
 %doc COPYING README
 %{_bindir}/libguestfs-test-tool
+%if %{with appliance}
 %{_libdir}/guestfs/
 %exclude %{_libdir}/guestfs/supermin.d/zz-packages-*
+%endif
 %{_libdir}/libguestfs.so.*
 %{_mandir}/man1/guestfs-faq.1*
 %{_mandir}/man1/guestfs-performance.1*
@@ -1091,18 +1243,21 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %doc examples/*.c
 %doc installed-docs/*
 %{_libdir}/libguestfs.so
+%if %{with appliance}
 %{_sbindir}/libguestfs-make-fixed-appliance
+%{_mandir}/man1/libguestfs-make-fixed-appliance.1*
+%endif
 %{_mandir}/man1/guestfs-building.1*
 %{_mandir}/man1/guestfs-hacking.1*
 %{_mandir}/man1/guestfs-internals.1*
 %{_mandir}/man1/guestfs-testing.1*
-%{_mandir}/man1/libguestfs-make-fixed-appliance.1*
 %{_mandir}/man3/guestfs.3*
 %{_mandir}/man3/guestfs-examples.3*
 %{_mandir}/man3/libguestfs.3*
 %{_includedir}/guestfs.h
 %{_libdir}/pkgconfig/libguestfs.pc
 
+%if %{with appliance}
 %ifarch x86_64
 %files gfs2
 %{_libdir}/guestfs/supermin.d/zz-packages-gfs2
@@ -1116,6 +1271,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %files xfs
 %{_libdir}/guestfs/supermin.d/zz-packages-xfs
+%endif
 
 
 %files inspect-icons
@@ -1125,10 +1281,12 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %files tools-c
 %doc README
 %config(noreplace) %{_sysconfdir}/libguestfs-tools.conf
+%if %{with ocaml}
 %{_sysconfdir}/virt-builder
 %dir %{_sysconfdir}/xdg/virt-builder
 %dir %{_sysconfdir}/xdg/virt-builder/repos.d
 %config %{_sysconfdir}/xdg/virt-builder/repos.d/*
+%endif
 %config %{_sysconfdir}/profile.d/guestfish.sh
 %{_mandir}/man5/libguestfs-tools.conf.5*
 %{_bindir}/guestfish
@@ -1139,16 +1297,20 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/guestunmount.1*
 %{_bindir}/virt-alignment-scan
 %{_mandir}/man1/virt-alignment-scan.1*
+%if %{with ocaml}
 %{_bindir}/virt-builder
 %{_mandir}/man1/virt-builder.1*
+%endif
 %{_bindir}/virt-cat
 %{_mandir}/man1/virt-cat.1*
 %{_bindir}/virt-copy-in
 %{_mandir}/man1/virt-copy-in.1*
 %{_bindir}/virt-copy-out
 %{_mandir}/man1/virt-copy-out.1*
+%if %{with ocaml}
 %{_bindir}/virt-customize
 %{_mandir}/man1/virt-customize.1*
+%endif
 %{_bindir}/virt-df
 %{_mandir}/man1/virt-df.1*
 %{_bindir}/virt-diff
@@ -1159,10 +1321,12 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/virt-filesystems.1*
 %{_bindir}/virt-format
 %{_mandir}/man1/virt-format.1*
+%if %{with ocaml}
 %{_bindir}/virt-get-kernel
 %{_mandir}/man1/virt-get-kernel.1*
 %{_bindir}/virt-index-validate
 %{_mandir}/man1/virt-index-validate.1*
+%endif
 %{_bindir}/virt-inspector
 %{_mandir}/man1/virt-inspector.1*
 %{_bindir}/virt-log
@@ -1171,6 +1335,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/virt-ls.1*
 %{_bindir}/virt-make-fs
 %{_mandir}/man1/virt-make-fs.1*
+%if %{with ocaml}
 %{_bindir}/virt-rescue
 %{_mandir}/man1/virt-rescue.1*
 %{_bindir}/virt-resize
@@ -1179,6 +1344,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/virt-sparsify.1*
 %{_bindir}/virt-sysprep
 %{_mandir}/man1/virt-sysprep.1*
+%endif
 %{_bindir}/virt-tail
 %{_mandir}/man1/virt-tail.1*
 %{_bindir}/virt-tar-in
@@ -1187,20 +1353,25 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/virt-tar-out.1*
 
 
+%if %{with libvirt}
 %files tools
 %doc README
 %{_bindir}/virt-win-reg
 %{_mandir}/man1/virt-win-reg.1*
+%endif
 
 
+%if %{with ocaml}
 %files -n virt-dib
 %doc COPYING README
 %{_bindir}/virt-dib
 %{_mandir}/man1/virt-dib.1*
 %{_libdir}/guestfs/supermin.d/zz-packages-dib
+%endif
 
 
 %ifnarch %{power64} s390x
+%if %{with ocaml}
 %files -n virt-v2v
 %doc COPYING README v2v/TODO
 %{_bindir}/virt-v2v
@@ -1208,7 +1379,6 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man1/virt-v2v.1*
 %{_mandir}/man1/virt-v2v-copy-to-local.1*
 %{_datadir}/virt-tools
-
 
 %files -n virt-p2v-maker
 %doc COPYING README
@@ -1220,6 +1390,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_datadir}/virt-p2v
 %{_libdir}/virt-p2v
 %endif
+%endif
 
 
 %files bash-completion
@@ -1230,6 +1401,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_datadir}/bash-completion/completions/virt-*
 
 
+%if %{with ocaml}
 %files -n ocaml-%{name}
 %{_libdir}/ocaml/guestfs
 %exclude %{_libdir}/ocaml/guestfs/*.a
@@ -1247,15 +1419,19 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_libdir}/ocaml/guestfs/*.cmx
 %{_libdir}/ocaml/guestfs/*.mli
 %{_mandir}/man3/guestfs-ocaml.3*
+%endif
 
 
+%if %{with perl}
 %files -n perl-Sys-Guestfs
 %doc perl/examples/*.pl
 %{perl_vendorarch}/*
 %{_mandir}/man3/Sys::Guestfs.3pm*
 %{_mandir}/man3/guestfs-perl.3*
+%endif
 
 
+%if %{with python}
 %files -n python-%{name}
 %doc python/examples/*.py
 %{python_sitearch}/libguestfsmod.so
@@ -1263,16 +1439,20 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{python_sitearch}/guestfs.pyc
 %{python_sitearch}/guestfs.pyo
 %{_mandir}/man3/guestfs-python.3*
+%endif
 
 
+%if %{with ruby}
 %files -n ruby-%{name}
 %doc ruby/examples/*.rb
 %doc ruby/doc/site/*
 %{ruby_vendorlibdir}/guestfs.rb
 %{ruby_vendorarchdir}/_guestfs.so
 %{_mandir}/man3/guestfs-ruby.3*
+%endif
 
 
+%if %{with java}
 %files java
 %{_libdir}/libguestfs_jni*.so.*
 %{_datadir}/java/*.jar
@@ -1286,6 +1466,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %files javadoc
 %{_javadocdir}/%{name}
+%endif
 
 
 %files -n lua-guestfs
@@ -1295,6 +1476,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_mandir}/man3/guestfs-lua.3*
 
 
+%if %{with gobject}
 %files gobject
 %{_libdir}/libguestfs-gobject-1.0.so.0*
 %{_libdir}/girepository-1.0/Guestfs-1.0.typelib
@@ -1311,8 +1493,11 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %files gobject-doc
 %{_datadir}/gtk-doc/html/guestfs
+%endif
 
 
+%if 0%{!?xcpng}
+# XCP-ng does not need manpages since this package is not supported
 %files man-pages-ja
 %lang(ja) %{_mandir}/ja/man1/*.1*
 %lang(ja) %{_mandir}/ja/man3/*.3*
@@ -1323,9 +1508,14 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %lang(uk) %{_mandir}/uk/man1/*.1*
 %lang(uk) %{_mandir}/uk/man3/*.3*
 %lang(uk) %{_mandir}/uk/man5/*.5*
+%endif
 
 
 %changelog
+* Wed Sep 16 2026 Philippe Coval <philippe.coval@vates.tech> - 1:1.36.10-6.1
+- Port to XCP-ng (without ocaml, deamon and appliance and more unsupported deps)
+- Rebuild with updated gnutls
+
 * Mon Apr 23 2018 Pino Toscano <ptoscano@redhat.com> - 1:1.36.10-6.el7_5.2
 - Fix qemu-img-ma dependency
   resolves: rhbz#1570533

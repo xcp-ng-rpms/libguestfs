@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Coval <philippe.coval@vates.tech>
+Date: Wed, 16 Sep 2026 17:25:11 +0200
+Subject: [PATCH] build: Make ocaml optional
+
+Related-to: XCPNG-3564
+Signed-off-by: Philippe Coval <philippe.coval@vates.tech>
+---
+ Makefile.am | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index ffe0028..6475e46 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -103,11 +103,16 @@ SUBDIRS += test-tool
+ SUBDIRS += fish
+ 
+ # virt-tools in C.
+-SUBDIRS += align cat diff df edit format inspector make-fs rescue
++SUBDIRS += align cat diff df edit format inspector make-fs
+ if HAVE_P2V
+ SUBDIRS += common/miniexpect p2v
+ endif
+ 
++# Depends on generation of guestfs_internal_get_console_socket
++if HAVE_OCAML
++SUBDIRS += rescue
++endif
++
+ # bash-completion
+ SUBDIRS += bash
+ 
+@@ -300,7 +305,12 @@ maintainer-upload-website:
+ #                   special xgettext option [not generated here]
+ #  po/POTFILES-ml - OCaml files, which need a special tool to translate
+ 
+-dist-hook: AUTHORS BUGS ChangeLog docs/C_SOURCE_FILES po/POTFILES po/POTFILES-ml
++dist_hook_deps=AUTHORS BUGS ChangeLog docs/C_SOURCE_FILES po/POTFILES
++if HAVE_OCAML
++dist_hook_deps+=po/POTFILES-ml
++endif
++
++dist-hook: ${dist_hook_deps}
+ 	cp AUTHORS $(distdir)/AUTHORS
+ 	cp BUGS $(distdir)/BUGS
+ 	cp ChangeLog $(distdir)/ChangeLog
