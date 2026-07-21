@@ -1,0 +1,50 @@
+From c73e6d1e2dcbcf2c7b17096953e48bc5a84ee7d2 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 16 May 2017 20:12:54 +0200
+Subject: [PATCH] s390x: launch: libvirt: Use <console> device sclp for
+ appliance debug messages (RHBZ#1376547).
+
+Thanks: Cole Robinson, Dan Horak, Thomas Huth.
+(cherry picked from commit 6328f332361675abb0233db890d2bfe0d9a5092a)
+---
+ lib/launch-libvirt.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/lib/launch-libvirt.c b/lib/launch-libvirt.c
+index 681281b9b..49bd40583 100644
+--- a/lib/launch-libvirt.c
++++ b/lib/launch-libvirt.c
+@@ -1347,6 +1347,7 @@ construct_libvirt_xml_devices (guestfs_h *g,
+         return -1;
+     }
+ 
++#ifndef __s390x__
+     /* Console. */
+     start_element ("serial") {
+       attribute ("type", "unix");
+@@ -1358,6 +1359,22 @@ construct_libvirt_xml_devices (guestfs_h *g,
+         attribute ("port", "0");
+       } end_element ();
+     } end_element ();
++#else
++    /* https://bugzilla.redhat.com/show_bug.cgi?id=1376547#c14
++     * and https://libvirt.org/formatdomain.html#elementCharConsole
++     */
++    start_element ("console") {
++      attribute ("type", "unix");
++      start_element ("source") {
++        attribute ("mode", "connect");
++        attribute ("path", params->data->console_path);
++      } end_element ();
++      start_element ("target") {
++	attribute ("type", "sclp");
++        attribute ("port", "0");
++      } end_element ();
++    } end_element ();
++#endif
+ 
+     /* Virtio-serial for guestfsd communication. */
+     start_element ("channel") {
+-- 
+2.14.3
+

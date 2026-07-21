@@ -1,0 +1,51 @@
+From bf7dba21337b2671f877f4e37e5eb031b26fc6e2 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 17 Oct 2017 10:43:30 +0100
+Subject: [PATCH] v2v: vddk: Check if nbdkit supports --selinux-label before
+ using.
+
+Give a better error message if not.
+
+Thanks: Ming Xie.
+(cherry picked from commit 59b4c4779f7dac645c794393d91c46467afab91c)
+---
+ v2v/input_libvirt_vddk.ml | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/v2v/input_libvirt_vddk.ml b/v2v/input_libvirt_vddk.ml
+index b322a9c49..f0b150efa 100644
+--- a/v2v/input_libvirt_vddk.ml
++++ b/v2v/input_libvirt_vddk.ml
+@@ -101,6 +101,20 @@ See also \"INPUT FROM VDDK\" in the virt-v2v(1) manual.") library_path
+       error (f_"You must pass the ‘--vddk-thumbprint’ option with the SSL thumbprint of the VMware server.  To find the thumbprint, see the nbdkit-vddk-plugin(1) manual.  See also \"INPUT FROM VDDK\" in the virt-v2v(1) manual.")
+   in
+ 
++  (* Check that nbdkit was compiled with SELinux support (for the
++   * --selinux-label option).
++   *)
++  let error_unless_nbdkit_compiled_with_selinux () =
++    let lines = external_command "nbdkit --dump-config" in
++    (* In nbdkit <= 1.1.15 the selinux attribute was not present
++     * at all in --dump-config output so there was no way to tell.
++     * Ignore this case because there will be an error later when
++     * we try to use the --selinux-label parameter.
++     *)
++    if List.mem "selinux=no" (List.map String.trim lines) then
++      error (f_"nbdkit was compiled without SELinux support.  You will have to recompile nbdkit with libselinux-devel installed, or else set SELinux to Permissive mode while doing the conversion.")
++  in
++
+   (* List of passthrough parameters. *)
+   let vddk_passthrus =
+     [ "config",      (fun { vddk_config }      -> vddk_config);
+@@ -135,6 +149,8 @@ object
+     error_unless_nbdkit_working ();
+     error_unless_nbdkit_vddk_working ();
+     error_unless_thumbprint ();
++    if have_selinux then
++      error_unless_nbdkit_compiled_with_selinux ();
+ 
+     (* Get the libvirt XML.  This also checks (as a side-effect)
+      * that the domain is not running.  (RHBZ#1138586)
+-- 
+2.14.3
+

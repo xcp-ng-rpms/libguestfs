@@ -1,0 +1,32 @@
+From 0ce5239605cf455e4891224b6594f33f24b7bd9a Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Thu, 2 Nov 2017 11:13:42 +0100
+Subject: [PATCH] v2v: -i ova: parse MAC address from <rasd:Address>
+ (RHBZ#1506572)
+
+Read the MAC address of the network interfaces from the <rasd:Address>
+tag of the OVF.  This seems to be one of the possible ways used in OVFs.
+
+(cherry picked from commit a1b008e2d138a90cbf2147d69d5d2d4d745b03cd)
+---
+ v2v/parse_ovf_from_ova.ml | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/v2v/parse_ovf_from_ova.ml b/v2v/parse_ovf_from_ova.ml
+index 989483e2e..dba0ce585 100644
+--- a/v2v/parse_ovf_from_ova.ml
++++ b/v2v/parse_ovf_from_ova.ml
+@@ -211,8 +211,9 @@ let parse_ovf_from_ova ovf_filename =
+       Xml.xpathctx_set_current_context xpathctx n;
+       let vnet =
+         xpath_string_default "rasd:ElementName/text()" (sprintf"eth%d" i) in
++      let mac = xpath_string "rasd:Address/text()" in
+       let nic = {
+-        s_mac = None;
++        s_mac = mac;
+         s_nic_model = None;
+         s_vnet = vnet;
+         s_vnet_orig = vnet;
+-- 
+2.14.3
+

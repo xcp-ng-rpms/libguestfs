@@ -1,0 +1,322 @@
+From 8018cf4c1206253c0f58e79b9afc171b3855b826 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 13 Oct 2017 15:45:39 +0100
+Subject: [PATCH] v2v: Remove --dcpath parameter and related functionality.
+
+With modern libvirt, when fetching the XML of a VMware guest libvirt
+passes us the datacenter path (dcpath).  However with older libvirt we
+had to guess this value, or else the user had to supply it on the
+command line.
+
+This commit removes all the guessing code and the --dcpath parameter
+(which will now give an error).
+
+This requires libvirt >= 1.2.20 for virt-v2v, released Oct 2015.
+
+(cherry picked from commit 3fdd923ce2d31e21a441042f9ded3c45dec6bbcb)
+---
+ v2v/cmdline.ml                      |  6 +----
+ v2v/copy_to_local.ml                | 15 ++++++------
+ v2v/input_libvirt.ml                |  4 ++--
+ v2v/input_libvirt.mli               |  4 ++--
+ v2v/input_libvirt_vcenter_https.ml  | 31 +++++++-----------------
+ v2v/input_libvirt_vcenter_https.mli |  2 +-
+ v2v/test-v2v-docs.sh                |  2 +-
+ v2v/vCenter.ml                      | 47 +------------------------------------
+ v2v/vCenter.mli                     |  8 -------
+ v2v/virt-v2v.pod                    | 13 ----------
+ 10 files changed, 24 insertions(+), 108 deletions(-)
+
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index 3050104d0..dfbb776ab 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -54,7 +54,6 @@ let parse_cmdline () =
+   let print_source = ref false in
+   let qemu_boot = ref false in
+ 
+-  let dcpath = ref None in
+   let input_conn = ref None in
+   let input_format = ref None in
+   let in_place = ref false in
+@@ -181,8 +180,6 @@ let parse_cmdline () =
+   let argspec = [
+     [ S 'b'; L"bridge" ],        Getopt.String ("in:out", add_bridge),     s_"Map bridge 'in' to 'out'";
+     [ L"compressed" ], Getopt.Set compressed,     s_"Compress output file (-of qcow2 only)";
+-    [ L"dcpath"; L"dcPath" ],  Getopt.String ("path", set_string_option_once "--dcpath" dcpath),
+-                                            s_"Override dcPath (for vCenter)";
+     [ L"debug-overlay"; L"debug-overlays" ], Getopt.Set debug_overlays, s_"Save overlay files";
+     [ S 'i' ],        Getopt.String (i_options, set_input_mode), s_"Set input mode (default: libvirt)";
+     [ M"ic" ],       Getopt.String ("uri", set_string_option_once "-ic" input_conn),
+@@ -268,7 +265,6 @@ read the man page virt-v2v(1).
+   (* Dereference the arguments. *)
+   let args = List.rev !args in
+   let compressed = !compressed in
+-  let dcpath = !dcpath in
+   let debug_overlays = !debug_overlays in
+   let do_copy = !do_copy in
+   let input_conn = !input_conn in
+@@ -367,7 +363,7 @@ read the man page virt-v2v(1).
+         | [guest] -> guest
+         | _ ->
+           error (f_"expecting a libvirt guest name on the command line") in
+-      Input_libvirt.input_libvirt dcpath vddk_options password input_conn guest
++      Input_libvirt.input_libvirt vddk_options password input_conn guest
+ 
+     | `LibvirtXML ->
+       (* -i libvirtxml: Expecting a filename (XML file). *)
+diff --git a/v2v/copy_to_local.ml b/v2v/copy_to_local.ml
+index 88fd9abde..ca5578f3f 100644
+--- a/v2v/copy_to_local.ml
++++ b/v2v/copy_to_local.ml
+@@ -144,6 +144,11 @@ read the man page virt-v2v-copy-to-local(1).
+   let disks =
+     match source with
+     | ESXi server ->
++       let dcpath =
++         match dcpath with
++         | Some dcpath -> dcpath
++         | None ->
++            error (f_"vcenter: <vmware:datacenterpath> was not found in the XML.  You need to upgrade to libvirt ≥ 1.2.20.") in
+        List.map (
+          fun (remote_disk, local_disk) ->
+            let url, sslverify =
+@@ -242,14 +247,10 @@ and parse_libvirt_xml guest_name xml =
+   let xpathctx = Xml.xpath_new_context doc in
+   Xml.xpath_register_ns xpathctx
+                         "vmware" "http://libvirt.org/schemas/domain/vmware/1.0";
+-  let xpath_string = xpath_string xpathctx
+-  and xpath_string_default = xpath_string_default xpathctx in
++  let xpath_string = xpath_string xpathctx in
+ 
+-  (* Get the dcpath, only present for libvirt >= 1.2.20 so use a
+-   * sensible default for older versions.
+-   *)
+-  let dcpath =
+-    xpath_string_default "/domain/vmware:datacenterpath" "ha-datacenter" in
++  (* Get the dcpath, present in libvirt >= 1.2.20. *)
++  let dcpath = xpath_string "/domain/vmware:datacenterpath" in
+ 
+   (* Parse the disks. *)
+   let get_disks, add_disk =
+diff --git a/v2v/input_libvirt.ml b/v2v/input_libvirt.ml
+index e8143b6ad..f4a8114f0 100644
+--- a/v2v/input_libvirt.ml
++++ b/v2v/input_libvirt.ml
+@@ -27,7 +27,7 @@ open Types
+ open Utils
+ 
+ (* Choose the right subclass based on the URI. *)
+-let input_libvirt dcpath vddk_options password libvirt_uri guest =
++let input_libvirt vddk_options password libvirt_uri guest =
+   match libvirt_uri with
+   | None ->
+     Input_libvirt_other.input_libvirt_other password libvirt_uri guest
+@@ -54,7 +54,7 @@ let input_libvirt dcpath vddk_options password libvirt_uri guest =
+        (match vddk_options with
+         | None ->
+            Input_libvirt_vcenter_https.input_libvirt_vcenter_https
+-             dcpath password libvirt_uri parsed_uri scheme server guest
++             password libvirt_uri parsed_uri scheme server guest
+         | Some vddk_options ->
+            Input_libvirt_vddk.input_libvirt_vddk vddk_options password
+                                                  libvirt_uri parsed_uri guest
+diff --git a/v2v/input_libvirt.mli b/v2v/input_libvirt.mli
+index 0a6aa3c54..acf2ca417 100644
+--- a/v2v/input_libvirt.mli
++++ b/v2v/input_libvirt.mli
+@@ -18,7 +18,7 @@
+ 
+ (** [-i libvirt] source. *)
+ 
+-val input_libvirt : string option -> Types.vddk_options option -> string option -> string option -> string -> Types.input
+-(** [input_libvirt dcpath vddk_options password libvirt_uri guest] creates
++val input_libvirt : Types.vddk_options option -> string option -> string option -> string -> Types.input
++(** [input_libvirt vddk_options password libvirt_uri guest] creates
+     and returns a new {!Types.input} object specialized for reading input
+     from libvirt sources. *)
+diff --git a/v2v/input_libvirt_vcenter_https.ml b/v2v/input_libvirt_vcenter_https.ml
+index df0e89315..497caca4f 100644
+--- a/v2v/input_libvirt_vcenter_https.ml
++++ b/v2v/input_libvirt_vcenter_https.ml
+@@ -36,7 +36,7 @@ let readahead_for_copying = Some (64 * 1024 * 1024)
+ 
+ (* Subclass specialized for handling VMware vCenter over https. *)
+ class input_libvirt_vcenter_https
+-  cmdline_dcPath password libvirt_uri parsed_uri scheme server guest =
++        password libvirt_uri parsed_uri scheme server guest =
+ object
+   inherit input_libvirt password libvirt_uri guest
+ 
+@@ -68,33 +68,18 @@ object
+     let xml = Libvirt_utils.dumpxml ?password ?conn:libvirt_uri guest in
+     let source, disks = parse_libvirt_xml ?conn:libvirt_uri xml in
+ 
+-    (* Find the <vmware:datacenterpath> element from the XML, if it
+-     * exists.  This was added in libvirt >= 1.2.20.
++    (* Find the <vmware:datacenterpath> element from the XML.  This
++     * was added in libvirt >= 1.2.20.
+      *)
+-    let xml_dcPath =
++    dcPath <- (
+       let doc = Xml.parse_memory xml in
+       let xpathctx = Xml.xpath_new_context doc in
+       Xml.xpath_register_ns xpathctx
+         "vmware" "http://libvirt.org/schemas/domain/vmware/1.0";
+-      let xpath_string = xpath_string xpathctx in
+-      xpath_string "/domain/vmware:datacenterpath" in
+-
+-    (* Calculate the dcPath we're going to use. *)
+-    dcPath <- (
+-      match cmdline_dcPath, xml_dcPath with
+-      (* Command line --dcpath parameter overrides everything, allowing
+-       * users to correct any mistakes in v2v or libvirt.
+-       *)
+-      | Some p, (None|Some _) ->
+-         debug "vcenter: using --dcpath from the command line: %s" p;
+-         p
+-      | None, Some p ->
+-         debug "vcenter: using <vmware:datacenterpath> from libvirt: %s" p;
+-         p
+-      | None, None ->
+-         let p = VCenter.guess_dcPath parsed_uri scheme in
+-         debug "vcenter: guessed dcPath from URI: %s" p;
+-         p
++      match xpath_string xpathctx "/domain/vmware:datacenterpath" with
++      | Some dcPath -> dcPath
++      | None ->
++         error (f_"vcenter: <vmware:datacenterpath> was not found in the XML.  You need to upgrade to libvirt ≥ 1.2.20.")
+     );
+ 
+     (* Save the original source paths, so that we can remap them again
+diff --git a/v2v/input_libvirt_vcenter_https.mli b/v2v/input_libvirt_vcenter_https.mli
+index 840b5a90f..d347f5fe6 100644
+--- a/v2v/input_libvirt_vcenter_https.mli
++++ b/v2v/input_libvirt_vcenter_https.mli
+@@ -18,4 +18,4 @@
+ 
+ (** [-i libvirt] when the source is VMware vCenter *)
+ 
+-val input_libvirt_vcenter_https : string option -> string option -> string option -> Xml.uri -> string -> string -> string -> Types.input
++val input_libvirt_vcenter_https : string option -> string option -> Xml.uri -> string -> string -> string -> Types.input
+diff --git a/v2v/test-v2v-docs.sh b/v2v/test-v2v-docs.sh
+index c5d98de7f..5e49d5240 100755
+--- a/v2v/test-v2v-docs.sh
++++ b/v2v/test-v2v-docs.sh
+@@ -22,4 +22,4 @@ $TEST_FUNCTIONS
+ skip_if_skipped
+ 
+ $top_srcdir/podcheck.pl virt-v2v.pod virt-v2v \
+-  --ignore=--dcPath,--debug-overlay,--ic,--if,--in-place,--no-trim,--oa,--oc,--of,--on,--os,--vmtype
++  --ignore=--debug-overlay,--ic,--if,--in-place,--no-trim,--oa,--oc,--of,--on,--os,--vmtype
+diff --git a/v2v/vCenter.ml b/v2v/vCenter.ml
+index f6e4288f2..2f7e32ad6 100644
+--- a/v2v/vCenter.ml
++++ b/v2v/vCenter.ml
+@@ -99,7 +99,7 @@ let get_session_cookie password scheme uri sslverify url =
+ 
+     if status = "404" then (
+       dump_response stderr;
+-      error (f_"vcenter: URL not found: %s\n\nThe '--dcpath' parameter may be useful.  See the explanation in the virt-v2v(1) man page OPTIONS section.") url
++      error (f_"vcenter: URL not found: %s") url
+     );
+ 
+     if status <> "200" then (
+@@ -126,51 +126,6 @@ let get_session_cookie password scheme uri sslverify url =
+       Some !session_cookie
+   )
+ 
+-let multiple_slash = Str.regexp "/+"
+-let default_dc = "ha-datacenter"
+-
+-let guess_dcPath uri = function
+-  | "vpx" ->
+-     (match uri.uri_path with
+-      | None ->
+-         warning (f_"vcenter: URI (-ic parameter) contains no path, so we cannot determine the dcPath (datacenter name)");
+-         default_dc
+-      | Some path ->
+-         (* vCenter: URIs are *usually* '/Folder/Datacenter/esxi' so we can
+-          * just chop off the first '/' and final '/esxi' to get the dcPath.
+-          *
+-          * The libvirt driver allows things like '/DC///esxi////' so we also
+-          * have to handle trailing slashes and collapse multiple slashes into
+-          * single (RHBZ#1258342).
+-          *
+-          * However if there is a cluster involved then the URI may be
+-          * /Folder/Datacenter/Cluster/esxi but dcPath=Folder/Datacenter/Cluster
+-          * won't work.  In this case the user has to adjust the path to
+-          * remove the Cluster name (which still works in libvirt).
+-          *)
+-         (* Collapse multiple slashes to single slash. *)
+-         let path = Str.global_replace multiple_slash "/" path in
+-         (* Chop off the first and trailing '/' (if found). *)
+-         let path =
+-           let len = String.length path in
+-           if len > 0 && path.[0] = '/' then
+-             String.sub path 1 (len-1)
+-           else path in
+-         let path =
+-           let len = String.length path in
+-           if len > 0 && path.[len-1] = '/' then
+-             String.sub path 0 (len-1)
+-           else path in
+-         (* Chop off the final element (ESXi hostname). *)
+-         let len =
+-           try String.rindex path '/' with Not_found -> String.length path in
+-         String.sub path 0 len
+-     );
+-  | "esx" -> (* Connecting to an ESXi hypervisor directly, so it's fixed. *)
+-     default_dc
+-  | _ ->     (* Don't know, so guess. *)
+-     default_dc
+-
+ let source_re = Str.regexp "^\\[\\(.*\\)\\] \\(.*\\)\\.vmdk$"
+ 
+ let map_source_to_https dcPath uri server path =
+diff --git a/v2v/vCenter.mli b/v2v/vCenter.mli
+index 224f45009..55d70b486 100644
+--- a/v2v/vCenter.mli
++++ b/v2v/vCenter.mli
+@@ -35,14 +35,6 @@ val get_session_cookie : string option -> string -> Xml.uri -> bool -> string ->
+     The session cookie is memoized so you can call this function as
+     often as you want, and only a single log in is made. *)
+ 
+-val guess_dcPath : Xml.uri -> string -> string
+-(** Try to guess the dcPath parameter from a URI.  The mapping is
+-    not precise.
+-
+-    This function is only used with [libvirt < 1.2.20] because later
+-    versions of libvirt provide the dcPath (see
+-    https://bugzilla.redhat.com/1263574). *)
+-
+ val map_source_to_uri : int option -> string -> string option -> Xml.uri -> string -> string -> string -> string
+ (** [map_source_to_uri readahead dcPath password uri scheme server path]
+     maps the [<source path=...>] string to a qemu URI.
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index d713d0b1f..92ed147d7 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -172,19 +172,6 @@ Write a compressed output file.  This is only allowed if the output
+ format is qcow2 (see I<-of> below), and is equivalent to the I<-c>
+ option of L<qemu-img(1)>.
+ 
+-=item B<--dcpath> Folder/Datacenter
+-
+-B<NB:> You don't need to use this parameter if you have
+-S<libvirt E<ge> 1.2.20>.
+-
+-For VMware vCenter, override the C<dcPath=...> parameter used to
+-select the datacenter.  Virt-v2v can usually calculate this from the
+-C<vpx://> URI, but if it gets it wrong, then you can override it using
+-this setting.  Go to your vCenter web folder interface, eg.
+-C<https://vcenter.example.com/folder> (I<without> a trailing slash),
+-and examine the C<dcPath=> parameter in the URLs that appear on this
+-page.
+-
+ =item B<--debug-overlays>
+ 
+ Save the overlay file(s) created during conversion.  This option is
+-- 
+2.14.3
+

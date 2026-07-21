@@ -1,0 +1,29 @@
+From 630c80558888131c094c15d8854a527d3c41261f Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 17 May 2017 11:38:05 +0200
+Subject: [PATCH] init: Add comment that we should consider using
+ /proc/consoles.
+
+Although we can't use it at the moment because it is incorrect
+on at least s390x (RHBZ#1351968).
+
+(cherry picked from commit fa6bc0fd83317d43df38c50bf94966b31024ca35)
+---
+ appliance/init | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/appliance/init b/appliance/init
+index 2c9aecd5f..735ba8946 100755
+--- a/appliance/init
++++ b/appliance/init
+@@ -179,6 +179,7 @@ else
+   # Run virt-rescue shell.
+ 
+   # Get name of the serial port, from console= passed by libguestfs.
++  # XXX Consider using /proc/consoles
+   guestfs_serial=$(grep -Eo 'console=[^[:space:]]+' /proc/cmdline |
+                    sed s/console=//)
+ 
+-- 
+2.14.3
+

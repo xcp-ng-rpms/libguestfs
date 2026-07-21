@@ -1,0 +1,77 @@
+From 516f008f29e77d676907208e51e2f57bb73888aa Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 16 May 2017 19:58:59 +0200
+Subject: [PATCH] s390x: launch: direct: Use virtio-*-ccw on this architecture.
+
+PCI devices don't exist/work.  You would see errors such as:
+
+qemu-system-s390x: -device virtio-rng-pci,rng=rng0: MSI-X support is mandatory in the S390 architecture
+(cherry picked from commit ddde6f9e2f14ccf8d91a8587052d0abcfb6496f1)
+---
+ lib/guestfs-internal.h | 26 +++++++++++++++++---------
+ lib/launch-direct.c    |  4 ++--
+ 2 files changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/lib/guestfs-internal.h b/lib/guestfs-internal.h
+index 949cacfef..f035e0931 100644
+--- a/lib/guestfs-internal.h
++++ b/lib/guestfs-internal.h
+@@ -142,20 +142,28 @@
+ /* Maximum size of Windows explorer.exe.  2.6MB on Windows 7. */
+ #define MAX_WINDOWS_EXPLORER_SIZE (4 * 1000 * 1000)
+ 
+-/* Differences in device names on ARM (virtio-mmio) vs normal
+- * hardware with PCI.
++/* Differences in device names on ARMv7 (virtio-mmio), s/390x (CCW) vs
++ * normal hardware with PCI.
+  */
+-#if !defined(__arm__)
+-#define VIRTIO_BLK "virtio-blk-pci"
+-#define VIRTIO_SCSI "virtio-scsi-pci"
+-#define VIRTIO_SERIAL "virtio-serial-pci"
+-#define VIRTIO_NET "virtio-net-pci"
+-#else /* ARMv7 */
++#if defined(__arm__)
+ #define VIRTIO_BLK "virtio-blk-device"
+ #define VIRTIO_SCSI "virtio-scsi-device"
+ #define VIRTIO_SERIAL "virtio-serial-device"
+ #define VIRTIO_NET "virtio-net-device"
+-#endif /* ARMv7 */
++#define VIRTIO_RNG "virtio-rng-device"
++#elif defined(__s390x__)
++#define VIRTIO_BLK "virtio-blk-ccw"
++#define VIRTIO_SCSI "virtio-scsi-ccw"
++#define VIRTIO_SERIAL "virtio-serial-ccw"
++#define VIRTIO_NET "virtio-net-ccw"
++#define VIRTIO_RNG "virtio-rng-ccw"
++#else
++#define VIRTIO_BLK "virtio-blk-pci"
++#define VIRTIO_SCSI "virtio-scsi-pci"
++#define VIRTIO_SERIAL "virtio-serial-pci"
++#define VIRTIO_NET "virtio-net-pci"
++#define VIRTIO_RNG "virtio-rng-pci"
++#endif
+ 
+ /* Machine types. */
+ #ifdef __arm__
+diff --git a/lib/launch-direct.c b/lib/launch-direct.c
+index 147e158de..c8841bfe4 100644
+--- a/lib/launch-direct.c
++++ b/lib/launch-direct.c
+@@ -463,11 +463,11 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+    * when needing entropy.
+    */
+   if (guestfs_int_qemu_supports_device (g, data->qemu_data,
+-                                        "virtio-rng-pci")) {
++                                        VIRTIO_RNG)) {
+     ADD_CMDLINE ("-object");
+     ADD_CMDLINE ("rng-random,filename=/dev/urandom,id=rng0");
+     ADD_CMDLINE ("-device");
+-    ADD_CMDLINE ("virtio-rng-pci,rng=rng0");
++    ADD_CMDLINE (VIRTIO_RNG ",rng=rng0");
+   }
+ 
+   /* Add drives */
+-- 
+2.14.3
+

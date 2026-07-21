@@ -1,0 +1,123 @@
+From bd75249646ed03f4db3c5d0268db95ab8a0f39c8 Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Wed, 31 Jan 2018 12:29:15 +0100
+Subject: [PATCH] customize: allow missing SELINUXTYPE in SELinux config
+
+libselinux defaults to "targeted" when no SELINUXTYPE is specified in
+/etc/config/selinux.  Hence do the same here, instead of failing because
+of the missing key.
+
+Add a slow test for checking SELinux relabeling on a Fedora 27 guest,
+both with no changes, and with a modified configuration.
+
+(cherry picked from commit 719d68fa247cc3885ecf7ec1c010faf83267d786)
+---
+ customize/Makefile.am            |  2 ++
+ customize/SELinux_relabel.ml     | 14 ++++++++++--
+ customize/test-selinuxrelabel.sh | 49 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 63 insertions(+), 2 deletions(-)
+ create mode 100755 customize/test-selinuxrelabel.sh
+
+diff --git a/customize/Makefile.am b/customize/Makefile.am
+index 07398b2e8..077194a1a 100644
+--- a/customize/Makefile.am
++++ b/customize/Makefile.am
+@@ -23,6 +23,7 @@ EXTRA_DIST = \
+ 	customize_main.ml \
+ 	test-firstboot.sh \
+ 	test-password.pl \
++	test-selinuxrelabel.sh \
+ 	test-settings.sh \
+ 	test-virt-customize.sh \
+ 	test-virt-customize-docs.sh \
+@@ -210,6 +211,7 @@ check-valgrind:
+ SLOW_TESTS = \
+ 	$(firstboot_test_scripts) \
+ 	$(password_test_scripts) \
++	test-selinuxrelabel.sh \
+ 	$(settings_test_scripts)
+ 
+ check-slow:
+diff --git a/customize/SELinux_relabel.ml b/customize/SELinux_relabel.ml
+index 11999299b..b6f394ac2 100644
+--- a/customize/SELinux_relabel.ml
++++ b/customize/SELinux_relabel.ml
+@@ -36,8 +36,18 @@ let relabel (g : G.guestfs) =
+       g#aug_load ();
+       debug_augeas_errors g;
+ 
+-      (* Get the SELinux policy name, eg. "targeted", "minimum". *)
+-      let policy = g#aug_get "/files/etc/selinux/config/SELINUXTYPE" in
++      (* Get the SELinux policy name, eg. "targeted", "minimum".
++       * Use "targeted" if not specified, just like libselinux does.
++       *)
++      let policy =
++        let config_path = "/files/etc/selinux/config" in
++        let selinuxtype_path = config_path ^ "/SELINUXTYPE" in
++        let keys = g#aug_ls config_path in
++        if Array.mem selinuxtype_path keys then
++          g#aug_get selinuxtype_path
++        else
++          "targeted" in
++
+       g#aug_close ();
+ 
+       (* Get the spec file name. *)
+diff --git a/customize/test-selinuxrelabel.sh b/customize/test-selinuxrelabel.sh
+new file mode 100755
+index 000000000..d13c0356c
+--- /dev/null
++++ b/customize/test-selinuxrelabel.sh
+@@ -0,0 +1,49 @@
++#!/bin/bash -
++# Test SELinux relabel functionality.
++# Copyright (C) 2018 Red Hat Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++
++# This slow test checks that SELinux relabel works.
++
++set -e
++
++$TEST_FUNCTIONS
++slow_test
++
++guestname="fedora-27"
++
++disk="selinuxrelabel.img"
++disk_overlay="selinuxrelabel-overlay.qcow2"
++rm -f "$disk"
++
++skip_unless_virt_builder_guest "$guestname"
++
++# Build a guest (using virt-builder).
++virt-builder "$guestname" --quiet -o "$disk"
++
++# Test #1: relabel with the default configuration works.
++rm -f  "$disk_overlay"
++guestfish -- disk-create "$disk_overlay" qcow2 -1 backingfile:"$disk"
++virt-customize -a "$disk" --selinux-relabel
++
++# Test #2: relabel with no SELINUXTYPE in the configuration.
++rm -f  "$disk_overlay"
++guestfish -- disk-create "$disk_overlay" qcow2 -1 backingfile:"$disk"
++virt-customize -a "$disk" \
++  --edit /etc/selinux/config:"s,^SELINUXTYPE=,#&,g" \
++  --selinux-relabel
++
++rm "$disk" "$disk_overlay"
+-- 
+2.14.3
+

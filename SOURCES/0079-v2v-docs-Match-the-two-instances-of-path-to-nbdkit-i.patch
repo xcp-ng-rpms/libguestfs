@@ -1,0 +1,31 @@
+From 91971da7f4b7d4a0b6a77160e30f7f12b65e2927 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Mon, 18 Dec 2017 10:29:11 +0000
+Subject: [PATCH] v2v: docs: Match the two instances of /path/to/nbdkit in the
+ documentation.
+
+Fixes commit d81a2ee185599c23a128ab65be9d48b415abf461.
+See also:
+https://bugzilla.redhat.com/show_bug.cgi?id=1513884#c5
+
+(cherry picked from commit dab065a8eed6c6d8d9c53956393566812cfe6a2e)
+---
+ v2v/virt-v2v.pod | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index d0387734a..7d3923bda 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -1481,7 +1481,7 @@ To import a particular guest from vCenter server or ESXi hypervisor,
+ use a command like the following, substituting the URI, guest name and
+ SSL thumbprint:
+ 
+- $ export PATH=/path/to/nbdkit:$PATH
++ $ export PATH=/path/to/nbdkit-1.1.x:$PATH
+  $ virt-v2v \
+      -ic 'vpx://root@vcenter.example.com/Datacenter/esxi?no_verify=1' \
+      -it vddk \
+-- 
+2.14.3
+

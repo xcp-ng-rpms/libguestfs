@@ -1,0 +1,33 @@
+From 8e556500316c8e53993f50fe9ecb56d9524f5cab Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 6 Dec 2017 15:53:41 +0000
+Subject: [PATCH] v2v: docs: State that --vddk-thumbprint is only required if
+ --vddk present (RHBZ#1513884).
+
+Thanks: Ming Xie, Pino Toscano.
+
+See also:
+https://bugzilla.redhat.com/show_bug.cgi?id=1513884#c2
+
+(cherry picked from commit 4b43697f9bc9b0fa33e26fbc2fce136ebaa89005)
+---
+ v2v/virt-v2v.pod | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 13f021c6d..e798ad1e7 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -528,7 +528,8 @@ See L</INPUT FROM VDDK> below for details.
+ 
+ When using VDDK mode, these options are passed unmodified to the
+ L<nbdkit(1)> VDDK plugin.  Please refer to L<nbdkit-vddk-plugin(1)>.
+-Only I<--vddk-thumbprint> is required, the others are optional.
++If I<--vddk> is present, I<--vddk-thumbprint> is also required,
++the rest are optional.
+ 
+ =item B<--vdsm-compat=0.10>
+ 
+-- 
+2.14.3
+

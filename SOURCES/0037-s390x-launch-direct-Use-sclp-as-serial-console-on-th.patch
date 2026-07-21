@@ -1,0 +1,37 @@
+From f774a2efed860774ba3a8e47e8ac81eeed2508fa Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 17 May 2017 12:16:07 +0200
+Subject: [PATCH] s390x: launch: direct: Use sclp as serial console on this
+ architecture.
+
+The same change to the direct backend as made to the libvirt backend
+in the previous commit.
+
+(cherry picked from commit ade2652bdac16656ba4ed821d74528a6de188fa0)
+---
+ lib/launch-direct.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/lib/launch-direct.c b/lib/launch-direct.c
+index 9cc153b21..147e158de 100644
+--- a/lib/launch-direct.c
++++ b/lib/launch-direct.c
+@@ -592,8 +592,15 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+   ADD_CMDLINE (VIRTIO_SERIAL);
+ 
+   /* Create the serial console. */
++#ifndef __s390x__
+   ADD_CMDLINE ("-serial");
+   ADD_CMDLINE ("stdio");
++#else
++  ADD_CMDLINE ("-chardev");
++  ADD_CMDLINE ("stdio,id=charconsole0");
++  ADD_CMDLINE ("-device");
++  ADD_CMDLINE ("sclpconsole,chardev=charconsole0");
++#endif
+ 
+   if (g->verbose &&
+       guestfs_int_qemu_supports_device (g, data->qemu_data,
+-- 
+2.14.3
+

@@ -1,0 +1,31 @@
+From 37f2bf9dff5e01904556248203f1dce9c9034eed Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 17 Oct 2017 10:56:14 +0100
+Subject: [PATCH] v2v: vddk: Force source format to raw.
+
+Thanks: Ming Xie.
+(cherry picked from commit 2ff287c4a7f12c26b8fb3a574129fbfb9a9157e7)
+---
+ v2v/input_libvirt_vddk.ml | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/v2v/input_libvirt_vddk.ml b/v2v/input_libvirt_vddk.ml
+index f0b150efa..33b34bd2e 100644
+--- a/v2v/input_libvirt_vddk.ml
++++ b/v2v/input_libvirt_vddk.ml
+@@ -338,7 +338,11 @@ If the messages above are not sufficient to diagnose the problem then add the 
+           *)
+          chmod sock 0o777;
+ 
+-         { disk with s_qemu_uri = qemu_uri }
++         (* nbdkit from a vddk source always presents us with the raw
++          * disk blocks from the guest, so force the format to raw here.
++          *)
++         { disk with s_qemu_uri = qemu_uri;
++                     s_format = Some "raw" }
+      ) disks in
+ 
+     if verbose () then (
+-- 
+2.14.3
+

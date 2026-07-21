@@ -1,0 +1,28 @@
+From 6b6ab3bf31cbca8e4920315bbd46badf6d532529 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Tue, 7 Nov 2017 10:03:54 +0000
+Subject: [PATCH] podwrapper: nbdkit-* man pages are libguestfs man pages.
+
+Don't use the external link for these.
+
+Thanks: Ming Xie.
+(cherry picked from commit 441fa82ee0d878ed63b1c213d8197c1f0ffde2a0)
+---
+ podwrapper.pl.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/podwrapper.pl.in b/podwrapper.pl.in
+index 619d3af2b..9b90d0faa 100755
+--- a/podwrapper.pl.in
++++ b/podwrapper.pl.in
+@@ -552,6 +552,7 @@ SUBHTML: {
+         return 1 if /^guestunmount/;
+         return 1 if /^hivex/;
+         return 1 if /^supermin/;
++        return 1 if /^nbdkit/;
+         return 0;
+     }
+ 
+-- 
+2.14.3
+

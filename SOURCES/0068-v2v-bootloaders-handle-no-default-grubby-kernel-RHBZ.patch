@@ -1,0 +1,37 @@
+From 67b740a77543bc0f0c6b4d0f52c8855b8705822b Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Fri, 1 Dec 2017 14:46:13 +0100
+Subject: [PATCH] v2v: bootloaders: handle no default grubby kernel
+ (RHBZ#1519204)
+
+When using grubby to get the default kernel of a guest, do not fail
+with a bogus error like:
+
+virt-v2v: error: libguestfs error: statns: statns_stub: path must start
+with a / character
+
+in case there is no default kernel that can be determined (e.g. because
+of a bogus configuration).
+---
+ v2v/linux_bootloaders.ml | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/v2v/linux_bootloaders.ml b/v2v/linux_bootloaders.ml
+index 25dab02fe..e241d93c2 100644
+--- a/v2v/linux_bootloaders.ml
++++ b/v2v/linux_bootloaders.ml
+@@ -281,7 +281,10 @@ object (self)
+       let res =
+         match get_default_method with
+         | MethodGrubby ->
+-          Some (g#command [| "grubby"; "--default-kernel" |])
++          let res = g#command [| "grubby"; "--default-kernel" |] in
++          (match res with
++           | "" -> None
++           | _ -> Some res)
+         | MethodPerlBootloader ->
+           let cmd =
+             [| "/usr/bin/perl"; "-MBootloader::Tools"; "-e"; "
+-- 
+2.14.3
+

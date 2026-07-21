@@ -1,0 +1,79 @@
+From 56835fbc66a9ae540764d1628922afaaa5b2fffc Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 13 Oct 2017 17:08:23 +0100
+Subject: [PATCH] v2v: vCenter: Factor out get_https_url code.
+
+Pure refactoring.
+
+(cherry picked from commit 388a70139910ed4b03d9765e403c35bb26cbe422)
+---
+ v2v/vCenter.ml | 46 ++++++++++++++++++++++++----------------------
+ 1 file changed, 24 insertions(+), 22 deletions(-)
+
+diff --git a/v2v/vCenter.ml b/v2v/vCenter.ml
+index 7fc0811a4..f53affb48 100644
+--- a/v2v/vCenter.ml
++++ b/v2v/vCenter.ml
+@@ -58,28 +58,7 @@ let rec map_source ?readahead ?password dcPath uri scheme server path =
+        (* XXX only works if the query string is not URI-quoted *)
+        String.find query "no_verify=1" = -1 in
+ 
+-  let https_url =
+-    if not (Str.string_match source_re path 0) then
+-      path
+-    else (
+-      let datastore = Str.matched_group 1 path
+-      and path = Str.matched_group 2 path in
+-
+-      let port =
+-        match uri.uri_port with
+-        | 443 -> ""
+-        | n when n >= 1 -> ":" ^ string_of_int n
+-        | _ -> "" in
+-
+-      (* XXX Old virt-v2v could also handle snapshots, ie:
+-       * "[datastore1] Fedora 20/Fedora 20-NNNNNN.vmdk"
+-       * XXX Need to handle templates.  The file is called "-delta.vmdk" in
+-       * place of "-flat.vmdk".
+-       *)
+-      sprintf "https://%s%s/folder/%s-flat.vmdk?dcPath=%s&dsName=%s"
+-              server port
+-              (uri_quote path) (uri_quote dcPath) (uri_quote datastore)
+-    ) in
++  let https_url = get_https_url dcPath uri server path in
+ 
+   let session_cookie =
+     get_session_cookie password scheme uri sslverify https_url in
+@@ -123,6 +102,29 @@ let rec map_source ?readahead ?password dcPath uri scheme server path =
+     session_cookie = session_cookie;
+     sslverify = sslverify }
+ 
++and get_https_url dcPath uri server path =
++  if not (Str.string_match source_re path 0) then
++    path
++  else (
++    let datastore = Str.matched_group 1 path
++    and path = Str.matched_group 2 path in
++
++    let port =
++      match uri.uri_port with
++      | 443 -> ""
++      | n when n >= 1 -> ":" ^ string_of_int n
++      | _ -> "" in
++
++    (* XXX Old virt-v2v could also handle snapshots, ie:
++     * "[datastore1] Fedora 20/Fedora 20-NNNNNN.vmdk"
++     * XXX Need to handle templates.  The file is called "-delta.vmdk" in
++     * place of "-flat.vmdk".
++     *)
++    sprintf "https://%s%s/folder/%s-flat.vmdk?dcPath=%s&dsName=%s"
++            server port
++            (uri_quote path) (uri_quote dcPath) (uri_quote datastore)
++  )
++
+ and get_session_cookie password scheme uri sslverify https_url =
+   let status, headers, dump_response =
+     fetch_headers_from_url password scheme uri sslverify https_url in
+-- 
+2.14.3
+

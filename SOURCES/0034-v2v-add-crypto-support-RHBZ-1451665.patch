@@ -1,0 +1,87 @@
+From a8853952b43e15fd4aa287d235d8583782475531 Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Mon, 22 May 2017 11:31:45 +0200
+Subject: [PATCH] v2v: add crypto support (RHBZ#1451665)
+
+Make use of the additional command line arguments, and API needed to
+decrypt LUKS partitions.  This extends to v2v the work done in other
+OCaml tools with commit 6b26a0cce4f1d6264bee88902b8931e39288c901,
+since it seems to be working fine after a basic testing.
+
+Related to: RHBZ#1362649
+
+(cherry picked from commit 7e6c16f1e7698317991b875f2d7ab3ce9e94c8bb)
+---
+ v2v/cmdline.ml   |  2 +-
+ v2v/v2v.ml       |  3 +++
+ v2v/virt-v2v.pod | 20 ++++++++++++++++++++
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index db2346a38..6b105886c 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -235,7 +235,7 @@ A short summary of the options is given below.  For detailed help please
+ read the man page virt-v2v(1).
+ ")
+       prog in
+-  let opthandle = create_standard_options argspec ~anon_fun usage_msg in
++  let opthandle = create_standard_options argspec ~anon_fun ~key_opts:true usage_msg in
+   Getopt.parse opthandle;
+ 
+   (* Dereference the arguments. *)
+diff --git a/v2v/v2v.ml b/v2v/v2v.ml
+index c1d412295..d03662c84 100644
+--- a/v2v/v2v.ml
++++ b/v2v/v2v.ml
+@@ -90,6 +90,9 @@ let rec main () =
+ 
+   g#launch ();
+ 
++  (* Decrypt the disks. *)
++  inspect_decrypt g;
++
+   (* Inspection - this also mounts up the filesystems. *)
+   (match conversion_mode with
+    | Copying _ -> message (f_"Inspecting the overlay")
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 7ed5c5d86..77b6f514f 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -191,6 +191,17 @@ Save the overlay file(s) created during conversion.  This option is
+ only used for debugging virt-v2v and may be removed in a future
+ version.
+ 
++=item B<--echo-keys>
++
++When prompting for keys and passphrases, virt-v2v normally turns
++echoing off so you cannot see what you are typing.  If you are not
++worried about Tempest attacks and there is no one else in the room you
++can specify this flag to see what you are typing.
++
++Note this options only applies to keys and passphrases for encrypted
++devices and partitions, not for passwords used to connect to remote
++servers.
++
+ =item B<-i> B<disk>
+ 
+ Set the input method to I<disk>.
+@@ -257,6 +268,15 @@ For I<-i disk> only, this specifies the format of the input disk
+ image.  For other input methods you should specify the input
+ format in the metadata.
+ 
++=item B<--keys-from-stdin>
++
++Read key or passphrase parameters from stdin.  The default is
++to try to read passphrases from the user by opening F</dev/tty>.
++
++Note this options only applies to keys and passphrases for encrypted
++devices and partitions, not for passwords used to connect to remote
++servers.
++
+ =item B<--machine-readable>
+ 
+ This option is used to make the output more machine friendly
+-- 
+2.14.3
+
