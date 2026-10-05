@@ -1,0 +1,81 @@
+From 46aaa657c76d473fcd6ac41a84101d7805306f58 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 11 Oct 2017 13:43:26 +0100
+Subject: [PATCH] v2v: -i vmx: Allow deviceType field to be completely omitted.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Microsoft make some VMX files available here which we could not parse.
+These files lack the expected ‘scsi0:0.deviceType’ field:
+https://developer.microsoft.com/en-us/microsoft-edge/tools/vms/
+
+According to
+http://faq.sanbarrow.com/index.php?action=artikel&cat=7&id=54&artlang=en
+this is permitted.  Also several other deviceType values may be found.
+
+Allow such VMX to be parsed.
+
+Thanks: Tom Sorensen
+
+Cherry picked from commit 418289029da9641b74984eb15eb1563649c38dd1.
+For RHEL 7.5: I inlined the Option.map function since that does not
+exist in this branch.
+---
+ v2v/input_vmx.ml | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/v2v/input_vmx.ml b/v2v/input_vmx.ml
+index bb09f0bf8..a4f77c2ab 100644
+--- a/v2v/input_vmx.ml
++++ b/v2v/input_vmx.ml
+@@ -35,7 +35,8 @@ let rec find_disks vmx vmx_filename =
+  *
+  * In the VMX file:
+  *   scsi0.virtualDev = "pvscsi"  # or may be "lsilogic" etc.
+- *   scsi0:0.deviceType = "scsi-hardDisk"
++ *   scsi0:0.deviceType = "disk" | "plainDisk" | "rawDisk" | "scsi-hardDisk"
++ *                        | omitted
+  *   scsi0:0.fileName = "guest.vmdk"
+  *)
+ and find_scsi_disks vmx vmx_filename =
+@@ -46,7 +47,8 @@ and find_scsi_disks vmx vmx_filename =
+     try ignore (get_scsi_controller_target ns); true
+     with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
+   in
+-  let scsi_device_types = [ "scsi-harddisk" ] in
++  let scsi_device_types = [ Some "disk"; Some "plaindisk"; Some "rawdisk";
++                            Some "scsi-harddisk"; None ] in
+   let scsi_controller = Source_SCSI in
+ 
+   find_hdds vmx vmx_filename
+@@ -67,7 +69,7 @@ and find_ide_disks vmx vmx_filename =
+     try ignore (get_ide_controller_target ns); true
+     with Scanf.Scan_failure _ | End_of_file | Failure _ -> false
+   in
+-  let ide_device_types = [ "ata-harddisk" ] in
++  let ide_device_types = [ Some "ata-harddisk" ] in
+   let ide_controller = Source_IDE in
+ 
+   find_hdds vmx vmx_filename
+@@ -86,11 +88,12 @@ and find_hdds vmx vmx_filename
+          if not (is_controller_target ns) then false
+          else (
+            (* Check the deviceType is one we are looking for. *)
+-           match Parse_vmx.get_string vmx [ns; "deviceType"] with
+-           | Some str ->
+-              let str = String.lowercase_ascii str in
+-              List.mem str device_types
+-           | None -> false
++           let dt = Parse_vmx.get_string vmx [ns; "deviceType"] in
++           let dt =
++             match dt with
++             | None -> None
++             | Some dt -> Some (String.lowercase_ascii dt) in
++           List.mem dt device_types
+          )
+       | _ -> false
+     ) vmx in
+-- 
+2.14.3
+

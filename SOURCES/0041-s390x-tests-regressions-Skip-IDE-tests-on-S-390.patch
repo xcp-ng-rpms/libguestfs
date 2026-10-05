@@ -1,0 +1,40 @@
+From a5a3600b8341278ee8c18dca89b9a9ba75ec2eca Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 17 May 2017 13:38:43 +0200
+Subject: [PATCH] s390x: tests: regressions: Skip IDE tests on S/390.
+
+IDE interface is not supported.
+
+(cherry picked from commit 93af83de853b87c555624227741bdf8af1918703)
+---
+ tests/regressions/rhbz690819.sh | 1 +
+ tests/regressions/rhbz975797.sh | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/tests/regressions/rhbz690819.sh b/tests/regressions/rhbz690819.sh
+index d18b4d81a..0b790862d 100755
+--- a/tests/regressions/rhbz690819.sh
++++ b/tests/regressions/rhbz690819.sh
+@@ -29,6 +29,7 @@ skip_if_arch arm
+ skip_if_arch aarch64
+ skip_if_arch ppc64
+ skip_if_arch ppc64le
++skip_if_arch s390x
+ skip_if_backend libvirt
+ # UML doesn't support the 'iface' parameter.
+ skip_if_backend uml
+diff --git a/tests/regressions/rhbz975797.sh b/tests/regressions/rhbz975797.sh
+index bc6a1c63f..04e8d23de 100755
+--- a/tests/regressions/rhbz975797.sh
++++ b/tests/regressions/rhbz975797.sh
+@@ -29,6 +29,7 @@ skip_if_arch arm
+ skip_if_arch aarch64
+ skip_if_arch ppc64
+ skip_if_arch ppc64le
++skip_if_arch s390x
+ skip_if_backend libvirt
+ # UML doesn't support the 'iface' parameter.
+ skip_if_backend uml
+-- 
+2.14.3
+

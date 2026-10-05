@@ -1,0 +1,146 @@
+From 18f83f6a6945e7356a880c6b861c758e399ac55c Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 11 Oct 2017 13:33:12 +0100
+Subject: [PATCH] v2v: -i vmx: Add a test case which lacks scsi0:0.deviceType =
+ "scsi-hardDisk"
+
+VMX file from:
+https://developer.microsoft.com/en-us/microsoft-edge/tools/vms/
+
+Thanks: Tom Sorensen
+(cherry picked from commit 6c54b68acb707d8f3dcd80453c23f57c54989be9)
+---
+ v2v/test-v2v-i-vmx-5.expected | 19 ++++++++++
+ v2v/test-v2v-i-vmx-5.vmx      | 80 +++++++++++++++++++++++++++++++++++++++++++
+ v2v/test-v2v-i-vmx.sh         |  2 +-
+ 3 files changed, 100 insertions(+), 1 deletion(-)
+ create mode 100644 v2v/test-v2v-i-vmx-5.expected
+ create mode 100644 v2v/test-v2v-i-vmx-5.vmx
+
+diff --git a/v2v/test-v2v-i-vmx-5.expected b/v2v/test-v2v-i-vmx-5.expected
+new file mode 100644
+index 000000000..4a33db13c
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-5.expected
+@@ -0,0 +1,19 @@
++
++Source guest information (--print-source option):
++
++    source name: MSEdge - Win10_preview
++hypervisor type: vmware
++         memory: 2147483648 (bytes)
++       nr vCPUs: 1
++   CPU features: 
++       firmware: bios
++        display: 
++          video: 
++          sound: 
++disks:
++	/MSEdge - Win10_preview.vmdk (vmdk) [scsi]
++removable media:
++
++NICs:
++	Bridge "ethernet0" mac: 00:0c:29:bf:e4:5d [e1000e]
++
+diff --git a/v2v/test-v2v-i-vmx-5.vmx b/v2v/test-v2v-i-vmx-5.vmx
+new file mode 100644
+index 000000000..eb54d85be
+--- /dev/null
++++ b/v2v/test-v2v-i-vmx-5.vmx
+@@ -0,0 +1,80 @@
++.encoding = "UTF-8"
++config.version = "8"
++virtualHW.version = "11"
++memsize = "2048"
++MemAllowAutoScaleDown = "FALSE"
++displayName = "MSEdge - Win10_preview"
++guestOS = "windows9-64"
++cpuid.coresPerSocket = "1"
++vmci0.present = "TRUE"
++ethernet0.present = "TRUE"
++ethernet0.addressType = "generated"
++ethernet0.connectionType = "bridged"
++ethernet0.virtualDev = "e1000e"
++ethernet0.startConnected = "TRUE"
++scsi0.present = "TRUE"
++scsi0.virtualDev = "lsisas1068"
++scsi0:0.present = "TRUE"
++scsi0:0.fileName = "MSEdge - Win10_preview.vmdk"
++bios.bootorder = "hdd,CDROM"
++cleanshutdown = "TRUE"
++ethernet0.bsdname = "en0"
++ethernet0.displayname = "Ethernet"
++ethernet0.linkstatepropagation.enable = "FALSE"
++gui.fullscreenatpoweron = "FALSE"
++gui.viewmodeatpoweron = "windowed"
++hgfs.linkrootshare = "TRUE"
++hgfs.maprootshare = "TRUE"
++isolation.tools.hgfs.disable = "FALSE"
++monitor.phys_bits_used = "42"
++msg.autoanswer = "true"
++numa.autosize.cookie = "10001"
++numa.autosize.vcpu.maxpervirtualnode = "1"
++nvram = "MSEdge - Win10_preview.nvram"
++proxyapps.publishtohost = "FALSE"
++remotedisplay.vnc.enabled = "FALSE"
++remotedisplay.vnc.port = "5900"
++replay.filename = ""
++replay.supported = "FALSE"
++scsi0:0.redo = ""
++softpoweroff = "TRUE"
++tools.synctime = "true"
++uuid.action = "create"
++virtualhw.productcompatibility = "hosted"
++vm.genid = "-570734802784577186"
++vm.genidx = "-5042519231342505152"
++vmotion.checkpointfbsize = "33554432"
++pciBridge0.present = "TRUE"
++tools.upgrade.policy = "useGlobal"
++pciBridge4.present = "TRUE"
++pciBridge4.virtualDev = "pcieRootPort"
++pciBridge4.functions = "8"
++pciBridge5.present = "TRUE"
++pciBridge5.virtualDev = "pcieRootPort"
++pciBridge5.functions = "8"
++pciBridge6.present = "TRUE"
++pciBridge6.virtualDev = "pcieRootPort"
++pciBridge6.functions = "8"
++pciBridge7.present = "TRUE"
++pciBridge7.virtualDev = "pcieRootPort"
++pciBridge7.functions = "8"
++hpet0.present = "TRUE"
++extendedConfigFile = "MSEdge - Win10_preview.vmxf"
++uuid.bios = "56 4d 54 59 5d 0c 51 8d-d3 40 38 4f fe bf e4 5d"
++uuid.location = "56 4d 54 59 5d 0c 51 8d-d3 40 38 4f fe bf e4 5d"
++migrate.hostlog = ".\MSEdge - Win10_preview-aee69569.hlog"
++pciBridge0.pciSlotNumber = "17"
++pciBridge4.pciSlotNumber = "21"
++pciBridge5.pciSlotNumber = "22"
++pciBridge6.pciSlotNumber = "23"
++pciBridge7.pciSlotNumber = "24"
++scsi0.pciSlotNumber = "160"
++ethernet0.pciSlotNumber = "192"
++vmci0.pciSlotNumber = "32"
++scsi0.sasWWID = "50 05 05 69 5d 0c 51 80"
++ethernet0.generatedAddress = "00:0c:29:bf:e4:5d"
++ethernet0.generatedAddressOffset = "0"
++vmci0.id = "-20978595"
++vmotion.checkpointSVGAPrimarySize = "33554432"
++toolsInstallManager.updateCounter = "1"
++toolsInstallManager.lastInstallError = "21004"
+diff --git a/v2v/test-v2v-i-vmx.sh b/v2v/test-v2v-i-vmx.sh
+index 997103d41..3822e7426 100755
+--- a/v2v/test-v2v-i-vmx.sh
++++ b/v2v/test-v2v-i-vmx.sh
+@@ -29,7 +29,7 @@ export VIRTIO_WIN="$top_srcdir/test-data/fake-virtio-win"
+ 
+ rm -f test-v2v-i-vmx-*.actual
+ 
+-for i in 1 2 3 4; do
++for i in 1 2 3 4 5; do
+     $VG virt-v2v --debug-gc \
+         -i vmx test-v2v-i-vmx-$i.vmx \
+         --print-source > test-v2v-i-vmx-$i.actual
+-- 
+2.14.3
+

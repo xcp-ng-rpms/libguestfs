@@ -1,0 +1,42 @@
+From 3c4780cda6bfdd20d2a71857e326cc9cd2fd708c Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Mon, 8 May 2017 09:55:42 +0100
+Subject: [PATCH] v2v: -i ova: Prefer pigz or pxz for uncompressing OVA files
+ (RHBZ#1448739).
+
+If the parallel tools pigz or pxz are available, prefer them for
+uncompressing gz- and xz-compressed OVA files respectively.  If not
+available then gzip or xz are used as normal.
+---
+ v2v/input_ova.ml | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/v2v/input_ova.ml b/v2v/input_ova.ml
+index c91011873..69cdf576b 100644
+--- a/v2v/input_ova.ml
++++ b/v2v/input_ova.ml
+@@ -40,9 +40,19 @@ let libvirt_supports_json_raw_driver () =
+   else
+     true
+ 
++let pigz_available =
++  let test = lazy (shell_command "pigz --help >/dev/null 2>&1" = 0) in
++  fun () -> Lazy.force test
++
++let pxz_available =
++  let test = lazy (shell_command "pxz --help >/dev/null 2>&1" = 0) in
++  fun () -> Lazy.force test
++
+ let zcat_command_of_format = function
+-  | `GZip -> "gzip -c -d"
+-  | `XZ -> "xz -c -d"
++  | `GZip ->
++     if pigz_available () then "pigz -c -d" else "gzip -c -d"
++  | `XZ ->
++     if pxz_available () then "pxz -c -d" else "xz -c -d"
+ 
+ (* Untar part or all files from tar archive. If [paths] is specified it is
+  * a list of paths in the tar archive.
+-- 
+2.14.3
+

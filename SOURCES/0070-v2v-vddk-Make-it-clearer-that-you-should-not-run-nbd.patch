@@ -1,0 +1,35 @@
+From be3d03e538592cff01d3e3693ada6e973df55abd Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Mon, 16 Oct 2017 10:06:54 +0100
+Subject: [PATCH] v2v: vddk: Make it clearer that you should not run nbdkit
+ 'make install'.
+
+(cherry picked from commit d81a2ee185599c23a128ab65be9d48b415abf461)
+---
+ v2v/virt-v2v.pod | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 92ed147d7..4f7ea8da6 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -1322,11 +1322,12 @@ L<https://github.com/libguestfs/nbdkit/tree/master/plugins/vddk>
+ 
+ =item 3.
+ 
+-You can run nbdkit from its source directory without needing to
+-install it.  Set C<$PATH> to include the nbdkit top build directory
+-(the directory containing a shell script called F<nbdkit>):
++You do B<not> need to run C<make install>.  You can run nbdkit from
++its source directory.  Set C<$PATH> to point to the nbdkit top build
++directory (that is, the directory containing a shell script called
++F<nbdkit>), eg:
+ 
+- export PATH=/path/to/nbdkit:$PATH
++ export PATH=/path/to/nbdkit-1.1.x:$PATH
+ 
+ =item 4.
+ 
+-- 
+2.14.3
+

@@ -1,0 +1,68 @@
+From 6db3412d15981d7624817d06999cb2ef4a03eed7 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 17 Jan 2018 10:11:53 +0000
+Subject: [PATCH] launch: direct: Use old-style file= and format= parameters
+ when not disabling locking (RHBZ#1503497).
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ancient qemu 1.5 (in RHEL 7) does not understand the
+file.file.filename= and file.driver= parameters.  Go back to using the
+old-style file= and format= parameters when we're not trying to set
+the file.backing.file.locking=off parameter.
+
+Fixes commit 9fe592808ccfd9ed184b88ca9c6cad2e1798dee3.
+
+Thanks: Yongkui Guo, Václav Kadlčík.
+(cherry picked from commit a30b51747fc6605f50a9d5d8095fd2b6d1473b1c)
+---
+ lib/launch-direct.c | 32 +++++++++++++++++++++++++-------
+ 1 file changed, 25 insertions(+), 7 deletions(-)
+
+diff --git a/lib/launch-direct.c b/lib/launch-direct.c
+index 4f31ac231..3d6e72e78 100644
+--- a/lib/launch-direct.c
++++ b/lib/launch-direct.c
+@@ -529,13 +529,31 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+     else {
+       /* Writable qcow2 overlay on top of read-only drive. */
+       escaped_file = guestfs_int_qemu_escape_param (g, drv->overlay);
+-      param = safe_asprintf
+-        (g, "file.file.filename=%s,cache=unsafe,file.driver=qcow2%s%s%s,id=hd%zu",
+-         escaped_file,
+-         drv->disk_label ? ",serial=" : "",
+-         drv->disk_label ? drv->disk_label : "",
+-         data->qemu_mandatory_locking && drv->src.protocol == drive_protocol_file ? ",file.backing.file.locking=off" : "",
+-         i);
++      if (data->qemu_mandatory_locking &&
++	/* Add the file-specific locking option only for files, as
++	 * qemu won't accept options unknown to the block driver in
++	 * use.
++	 */
++	drv->src.protocol == drive_protocol_file) {
++        param = safe_asprintf
++          (g, "file.file.filename=%s,file.driver=qcow2,file.backing.file.locking=off,cache=unsafe%s%s,id=hd%zu",
++           escaped_file,
++           drv->disk_label ? ",serial=" : "",
++           drv->disk_label ? drv->disk_label : "",
++           i);
++      } else {
++        /* Ancient qemu (esp. qemu 1.5 in RHEL 7) didn't understand the
++         * file.file.filename= parameter, so use the safer old-style
++         * form of parameters unless we actually want to specify the
++         * locking flag above.
++         */
++        param = safe_asprintf
++          (g, "file=%s,format=qcow2,cache=unsafe%s%s,id=hd%zu",
++           escaped_file,
++           drv->disk_label ? ",serial=" : "",
++           drv->disk_label ? drv->disk_label : "",
++           i);
++      }
+     }
+ 
+     /* If there's an explicit 'iface', use it.  Otherwise default to
+-- 
+2.14.3
+

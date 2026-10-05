@@ -1,0 +1,26 @@
+From 88dc95888f15c353581d0e9779d654935d9e820b Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 10 Oct 2014 17:45:39 +0100
+Subject: [PATCH] RHEL 7: Revert "appliance: add dhcp-client on Mageia"
+
+This reverts commit 8f3a2ca5358d5601be7a9247b6d08193c4e2da46.
+---
+ appliance/packagelist.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/appliance/packagelist.in b/appliance/packagelist.in
+index a2f6107b8..8a71f6e98 100644
+--- a/appliance/packagelist.in
++++ b/appliance/packagelist.in
+@@ -189,7 +189,7 @@ ifelse(MAGEIA,1,
+   chkconfig /* for /etc/init.d */
+   cdrkit-genisoimage
+   cdrkit-isotools
+-  dhcp-client
++  dhclient
+   extlinux
+   gfs2-utils
+   grub
+-- 
+2.14.3
+

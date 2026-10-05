@@ -1,0 +1,31 @@
+From d4d3e90ad9c9e144171ece825f60cb804449f835 Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Mon, 23 Oct 2017 17:44:23 +0200
+Subject: [PATCH] rescue: initialize CLEANUP pointer variable
+
+This way it will not try to free uninitialized memory when going out of
+scope, and the inspector mode is not enabled.
+
+Fixes commit 3637c42f4e521eb647d7dfae7f48eb1689d0af54.
+
+(cherry picked from commit 0942241395b7faf02fd651a0d7b99628458febe4)
+---
+ rescue/escape.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/rescue/escape.c b/rescue/escape.c
+index d6dc9d329..ae4919f69 100644
+--- a/rescue/escape.c
++++ b/rescue/escape.c
+@@ -236,7 +236,7 @@ print_help (void)
+ static void
+ print_inspector (void)
+ {
+-  CLEANUP_FREE_STRING_LIST char **roots;
++  CLEANUP_FREE_STRING_LIST char **roots = NULL;
+   size_t i;
+   const char *root;
+   char *str;
+-- 
+2.14.3
+

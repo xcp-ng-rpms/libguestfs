@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Philippe Coval <philippe.coval@vates.tech>
+Date: Tue, 21 Jul 2026 18:56:51 +0200
+Subject: [PATCH] build: Add check for gtkdoc in configure.ac
+
+This fix prevent this issue:
+
+   gtkdocize: GTK_DOC_CHECK not called in ./configure.ac
+   autoreconf: error: gtkdocize failed with exit status: 1
+
+Related-to: XCPNG-3574
+Signed-off-by: Philippe Coval <philippe.coval@vates.tech>
+---
+ configure.ac | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/configure.ac b/configure.ac
+index 2b912fe..277f519 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -346,6 +346,11 @@ AC_CONFIG_FILES([Makefile
+                  v2v/test-harness/Makefile
+                  v2v/test-harness/META
+                  website/index.html])
++
++
++dnl GTK-Doc integration (registers --enable-gtk-doc switches, etc.)
++GTK_DOC_CHECK([1.28])
++
+ AC_OUTPUT
+ 
+ dnl Produce summary.

@@ -1,0 +1,496 @@
+From f00bde700faf0708c8af440efdcc6b48e93f3ce4 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 13 Oct 2017 16:30:16 +0100
+Subject: [PATCH] v2v: vCenter: Refactor the API to this module.
+
+This module had a selection of functions taking a different mix of
+parameters and doing slightly different things.  You could call one
+function to return an https://... URL, or another function to return a
+qemu URL, and there was a third function to get the session cookie but
+you generally had to call that anyway (and it was implicitly called
+when making the qemu URL!)
+
+Integrate these into a single function which returns a struct
+returning all possible values.
+
+This is conceptually refactoring, except that the session cookie is no
+longer memoized, but we didn't use this feature (of calling
+get_session_cookie multiple times) anyway.
+
+(cherry picked from commit fb79fcde2947ff7e73f96343e8311e43b22a6f66)
+---
+ v2v/copy_to_local.ml               |  12 +-
+ v2v/input_libvirt_vcenter_https.ml |  12 +-
+ v2v/vCenter.ml                     | 319 +++++++++++++++++++------------------
+ v2v/vCenter.mli                    |  66 +++++---
+ 4 files changed, 211 insertions(+), 198 deletions(-)
+
+diff --git a/v2v/copy_to_local.ml b/v2v/copy_to_local.ml
+index ca5578f3f..5fb1b79ff 100644
+--- a/v2v/copy_to_local.ml
++++ b/v2v/copy_to_local.ml
+@@ -151,14 +151,10 @@ read the man page virt-v2v-copy-to-local(1).
+             error (f_"vcenter: <vmware:datacenterpath> was not found in the XML.  You need to upgrade to libvirt ≥ 1.2.20.") in
+        List.map (
+          fun (remote_disk, local_disk) ->
+-           let url, sslverify =
+-             VCenter.map_source_to_https dcpath parsed_uri
+-                                         server remote_disk in
+-           debug "esxi: source disk %s (sslverify=%b)" url sslverify;
+-           let cookie =
+-             VCenter.get_session_cookie password "esx"
+-                                        parsed_uri sslverify url in
+-           (url, local_disk, sslverify, cookie)
++           let { VCenter.https_url; sslverify; session_cookie } =
++             VCenter.map_source dcpath parsed_uri "esx" server remote_disk in
++           debug "esxi: source disk %s (sslverify=%b)" https_url sslverify;
++           (https_url, local_disk, sslverify, session_cookie)
+        ) disks
+     | Test | Xen_ssh _ ->
+        List.map (fun (remote_disk, local_disk) ->
+diff --git a/v2v/input_libvirt_vcenter_https.ml b/v2v/input_libvirt_vcenter_https.ml
+index 497caca4f..1153e74a3 100644
+--- a/v2v/input_libvirt_vcenter_https.ml
++++ b/v2v/input_libvirt_vcenter_https.ml
+@@ -102,9 +102,9 @@ object
+       | { p_source = P_source_dev _ } -> assert false
+       | { p_source_disk = disk; p_source = P_dont_rewrite } -> disk
+       | { p_source_disk = disk; p_source = P_source_file path } ->
+-        let qemu_uri =
+-          VCenter.map_source_to_uri readahead dcPath password
+-                                    parsed_uri scheme server path in
++        let { VCenter.qemu_uri } =
++          VCenter.map_source ?readahead ?password
++                             dcPath parsed_uri scheme server path in
+ 
+         (* The libvirt ESX driver doesn't normally specify a format, but
+          * the format of the -flat file is *always* raw, so force it here.
+@@ -123,9 +123,9 @@ object
+     | None -> ()
+     | Some orig_path ->
+       let readahead = readahead_for_copying in
+-      let backing_qemu_uri =
+-        VCenter.map_source_to_uri readahead dcPath password
+-                                  parsed_uri scheme server orig_path in
++      let { VCenter.qemu_uri = backing_qemu_uri } =
++        VCenter.map_source ?readahead ?password
++                           dcPath parsed_uri scheme server orig_path in
+ 
+       (* Rebase the qcow2 overlay to adjust the readahead parameter. *)
+       let cmd = [ "qemu-img"; "rebase"; "-u"; "-b"; backing_qemu_uri;
+diff --git a/v2v/vCenter.ml b/v2v/vCenter.ml
+index 2f7e32ad6..341a40b25 100644
+--- a/v2v/vCenter.ml
++++ b/v2v/vCenter.ml
+@@ -38,167 +38,168 @@ let uri_quote str =
+   done;
+   String.concat "" (List.rev !xs)
+ 
+-(* Memoized session cookie. *)
+-let session_cookie = ref ""
+-
+-let get_session_cookie password scheme uri sslverify url =
+-  if !session_cookie <> "" then
+-    Some !session_cookie
+-  else (
+-    let curl_args = ref [
+-      "head", None;
+-      "silent", None;
+-      "url", Some url;
+-    ] in
+-    (match uri.uri_user, password with
+-     | None, None -> ()
+-     | None, Some _ ->
+-        warning (f_"--password-file parameter ignored because 'user@' was not given in the URL")
+-     | Some user, None ->
+-        push_back curl_args ("user", Some user)
+-     | Some user, Some password ->
+-        push_back curl_args ("user", Some (user ^ ":" ^ password))
+-    );
+-    if not sslverify then push_back curl_args ("insecure", None);
+-
+-    let curl_h = Curl.create !curl_args in
+-    let lines = Curl.run curl_h in
+-
+-    let dump_response chan =
+-      Curl.print chan curl_h;
+-
+-      (* Dump out the output of the command. *)
+-      List.iter (fun x -> fprintf chan "%s\n" x) lines;
+-      flush chan
+-    in
+-
+-    if verbose () then dump_response stderr;
+-
+-    (* Look for the last HTTP/x.y NNN status code in the output. *)
+-    let status = ref "" in
+-    List.iter (
+-      fun line ->
+-        let len = String.length line in
+-        if len >= 12 && String.sub line 0 5 = "HTTP/" then
+-          status := String.sub line 9 3
+-    ) lines;
+-    let status = !status in
+-    if status = "" then (
+-      dump_response stderr;
+-      error (f_"vcenter: no status code in output of 'curl' command.  Is 'curl' installed?")
+-    );
+-
+-    if status = "401" then (
+-      dump_response stderr;
+-      if uri.uri_user <> None then
+-        error (f_"vcenter: incorrect username or password")
+-      else
+-        error (f_"vcenter: incorrect username or password.  You might need to specify the username in the URI like this: %s://USERNAME@[etc]")
+-              scheme
+-    );
+-
+-    if status = "404" then (
+-      dump_response stderr;
+-      error (f_"vcenter: URL not found: %s") url
+-    );
+-
+-    if status <> "200" then (
+-      dump_response stderr;
+-      error (f_"vcenter: invalid response from server")
+-    );
+-
+-    (* Get the cookie. *)
+-    List.iter (
+-      fun line ->
+-        let len = String.length line in
+-        if len >= 12 && String.sub line 0 12 = "Set-Cookie: " then (
+-          let line = String.sub line 12 (len-12) in
+-          let cookie, _ = String.split ";" line in
+-          session_cookie := cookie
+-        )
+-    ) lines;
+-    if !session_cookie = "" then (
+-      dump_response stderr;
+-      warning (f_"vcenter: could not read session cookie from the vCenter Server, conversion may consume all sessions on the server and fail part way through");
+-      None
+-    )
+-    else
+-      Some !session_cookie
+-  )
++type remote_resource = {
++  https_url : string;
++  qemu_uri : string;
++  session_cookie : string option;
++  sslverify : bool;
++}
+ 
+ let source_re = Str.regexp "^\\[\\(.*\\)\\] \\(.*\\)\\.vmdk$"
+ 
+-let map_source_to_https dcPath uri server path =
+-  if not (Str.string_match source_re path 0) then
+-    (path, true)
+-  else (
+-    let datastore = Str.matched_group 1 path
+-    and path = Str.matched_group 2 path in
+-
+-    let port =
+-      match uri.uri_port with
+-      | 443 -> ""
+-      | n when n >= 1 -> ":" ^ string_of_int n
+-      | _ -> "" in
+-
+-    (* XXX Old virt-v2v could also handle snapshots, ie:
+-     * "[datastore1] Fedora 20/Fedora 20-NNNNNN.vmdk"
+-     * XXX Need to handle templates.  The file is called "-delta.vmdk" in
+-     * place of "-flat.vmdk".
+-     *)
+-    let url =
+-      sprintf
+-        "https://%s%s/folder/%s-flat.vmdk?dcPath=%s&dsName=%s"
+-        server port
+-        (uri_quote path) (uri_quote dcPath) (uri_quote datastore) in
+-
+-    (* If no_verify=1 was passed in the libvirt URI, then we have to
+-     * turn off certificate verification here too.
+-     *)
+-    let sslverify =
+-      match uri.uri_query_raw with
+-      | None -> true
+-      | Some query ->
+-        (* XXX only works if the query string is not URI-quoted *)
+-        String.find query "no_verify=1" = -1 in
+-
+-    (url, sslverify)
+-  )
+-
+-let map_source_to_uri readahead dcPath password uri scheme server path =
+-  let url, sslverify = map_source_to_https dcPath uri server path in
+-
+-  (* Now we have to query the server to get the session cookie. *)
+-  let session_cookie = get_session_cookie password scheme uri sslverify url in
+-
+-  (* Construct the JSON parameters. *)
+-  let json_params = [
+-    "file.driver", JSON.String "https";
+-    "file.url", JSON.String url;
+-    (* https://bugzilla.redhat.com/show_bug.cgi?id=1146007#c10 *)
+-    "file.timeout", JSON.Int 2000;
+-  ] in
+-
+-  let json_params =
+-    match readahead with
+-    | None -> json_params
+-    | Some readahead ->
+-       ("file.readahead", JSON.Int readahead) :: json_params in
+-
+-  let json_params =
+-    if sslverify then json_params
+-    else ("file.sslverify", JSON.String "off") :: json_params in
+-
+-  let json_params =
+-    match session_cookie with
+-    | None -> json_params
+-    | Some cookie -> ("file.cookie", JSON.String cookie) :: json_params in
+-
+-  debug "vcenter: json parameters: %s" (JSON.string_of_doc json_params);
+-
+-  (* Turn the JSON parameters into a 'json:' protocol string.
+-   * Note this requires qemu-img >= 2.1.0.
++let rec map_source ?readahead ?password dcPath uri scheme server path =
++  (* If no_verify=1 was passed in the libvirt URI, then we have to
++   * turn off certificate verification here too.
+    *)
+-  let qemu_uri = "json: " ^ JSON.string_of_doc json_params in
++  let sslverify =
++    match uri.uri_query_raw with
++    | None -> true
++    | Some query ->
++       (* XXX only works if the query string is not URI-quoted *)
++       String.find query "no_verify=1" = -1 in
+ 
+-  qemu_uri
++  let https_url =
++    if not (Str.string_match source_re path 0) then
++      path
++    else (
++      let datastore = Str.matched_group 1 path
++      and path = Str.matched_group 2 path in
++
++      let port =
++        match uri.uri_port with
++        | 443 -> ""
++        | n when n >= 1 -> ":" ^ string_of_int n
++        | _ -> "" in
++
++      (* XXX Old virt-v2v could also handle snapshots, ie:
++       * "[datastore1] Fedora 20/Fedora 20-NNNNNN.vmdk"
++       * XXX Need to handle templates.  The file is called "-delta.vmdk" in
++       * place of "-flat.vmdk".
++       *)
++      sprintf "https://%s%s/folder/%s-flat.vmdk?dcPath=%s&dsName=%s"
++              server port
++              (uri_quote path) (uri_quote dcPath) (uri_quote datastore)
++    ) in
++
++  let session_cookie =
++    get_session_cookie password scheme uri sslverify https_url in
++
++  let qemu_uri =
++    (* Construct the JSON parameters for the qemu URI. *)
++    let json_params = [
++      "file.driver", JSON.String "https";
++      "file.url", JSON.String https_url;
++      (* https://bugzilla.redhat.com/show_bug.cgi?id=1146007#c10 *)
++      "file.timeout", JSON.Int 2000;
++    ] in
++
++    let json_params =
++      match readahead with
++      | None -> json_params
++      | Some readahead ->
++         ("file.readahead", JSON.Int readahead) :: json_params in
++
++    let json_params =
++      if sslverify then json_params
++      else ("file.sslverify", JSON.String "off") :: json_params in
++
++    let json_params =
++      match session_cookie with
++      | None -> json_params
++      | Some cookie -> ("file.cookie", JSON.String cookie) :: json_params in
++
++    debug "vcenter: json parameters: %s" (JSON.string_of_doc json_params);
++
++    (* Turn the JSON parameters into a 'json:' protocol string.
++     * Note this requires qemu-img >= 2.1.0.
++     *)
++    let qemu_uri = "json: " ^ JSON.string_of_doc json_params in
++
++    qemu_uri in
++
++  (* Return the struct. *)
++  { https_url = https_url;
++    qemu_uri = qemu_uri;
++    session_cookie = session_cookie;
++    sslverify = sslverify }
++
++and get_session_cookie password scheme uri sslverify https_url =
++  let curl_args = ref [
++    "head", None;
++    "silent", None;
++    "url", Some https_url;
++  ] in
++  (match uri.uri_user, password with
++   | None, None -> ()
++   | None, Some _ ->
++      warning (f_"--password-file parameter ignored because 'user@' was not given in the URL")
++   | Some user, None ->
++      push_back curl_args ("user", Some user)
++   | Some user, Some password ->
++      push_back curl_args ("user", Some (user ^ ":" ^ password))
++  );
++  if not sslverify then push_back curl_args ("insecure", None);
++
++  let curl_h = Curl.create !curl_args in
++  let lines = Curl.run curl_h in
++
++  let dump_response chan =
++    Curl.print chan curl_h;
++
++    (* Dump out the output of the command. *)
++    List.iter (fun x -> fprintf chan "%s\n" x) lines;
++    flush chan
++  in
++
++  if verbose () then dump_response stderr;
++
++  (* Look for the last HTTP/x.y NNN status code in the output. *)
++  let status = ref "" in
++  List.iter (
++    fun line ->
++      let len = String.length line in
++      if len >= 12 && String.sub line 0 5 = "HTTP/" then
++        status := String.sub line 9 3
++  ) lines;
++  let status = !status in
++  if status = "" then (
++    dump_response stderr;
++    error (f_"vcenter: no status code in output of ‘curl’ command.  Is ‘curl’ installed?")
++  );
++
++  if status = "401" then (
++    dump_response stderr;
++    if uri.uri_user <> None then
++      error (f_"vcenter: incorrect username or password")
++    else
++      error (f_"vcenter: incorrect username or password.  You might need to specify the username in the URI like this: %s://USERNAME@[etc]")
++            scheme
++  );
++
++  if status = "404" then (
++    dump_response stderr;
++    error (f_"vcenter: URL not found: %s") https_url
++  );
++
++  if status <> "200" then (
++    dump_response stderr;
++    error (f_"vcenter: invalid response from server")
++  );
++
++  (* Get the cookie. *)
++  let rec loop = function
++    | [] ->
++       dump_response stderr;
++       warning (f_"vcenter: could not read session cookie from the vCenter Server, conversion may consume all sessions on the server and fail part way through");
++       None
++    | line :: lines ->
++       let len = String.length line in
++       if len >= 12 && String.sub line 0 12 = "Set-Cookie: " then (
++         let line = String.sub line 12 (len-12) in
++         let cookie, _ = String.split ";" line in
++         Some cookie
++       )
++       else
++         loop lines
++  in
++  loop lines
+diff --git a/v2v/vCenter.mli b/v2v/vCenter.mli
+index 55d70b486..03749966f 100644
+--- a/v2v/vCenter.mli
++++ b/v2v/vCenter.mli
+@@ -18,35 +18,51 @@
+ 
+ (** Functions for dealing with VMware vCenter. *)
+ 
+-val get_session_cookie : string option -> string -> Xml.uri -> bool -> string -> string option
+-(** [get_session_cookie password scheme uri sslverify url]
+-    contacts the vCenter server, logs in, and gets the session cookie,
+-    which can later be passed back to the server instead of having to
+-    log in each time (this is also more efficient since it avoids
+-    vCenter running out of authentication sessions).
++type remote_resource = {
++  https_url : string;
++  (** The full URL of the remote disk as an https link on the vCenter
++      server.  It will have the general form
++      [https://vcenter/folder/.../guest-flat.vmdk?dcPath=...&...] *)
+ 
+-    Returns [None] if the session cookie could not be read (but
+-    authentication was successful).  You can proceed without the
+-    session cookie in this case, but there is an unavoidable
+-    danger of running out of authentication sessions.  If the
+-    session cookie could not be read, this function prints a
+-    warning.
++  qemu_uri : string;
++  (** The remote disk as a QEMU URI.  This opaque blob (usually a
++      [json:] URL) can be passed to [qemu] or [qemu-img] as a backing
++      file. *)
+ 
+-    The session cookie is memoized so you can call this function as
+-    often as you want, and only a single log in is made. *)
++  session_cookie : string option;
++  (** When creating the URLs above, the module contacts the vCenter
++      server, logs in, and gets the session cookie, which can later
++      be passed back to the server instead of having to log in each
++      time (this is also more efficient since it avoids vCenter
++      running out of authentication sessions).
+ 
+-val map_source_to_uri : int option -> string -> string option -> Xml.uri -> string -> string -> string -> string
+-(** [map_source_to_uri readahead dcPath password uri scheme server path]
+-    maps the [<source path=...>] string to a qemu URI.
++      This can be [None] if the session cookie could not be read (but
++      authentication was successful).  You can proceed without the
++      session cookie in this case, but there is an unavoidable
++      danger of running out of authentication sessions.  If the
++      session cookie could not be read, this function prints a
++      warning.
+ 
+-    The [path] will be something like:
++      If authentication {i failed} then the {!map_source} function
++      would exit with an error, so [None] does not indicate auth
++      failure. *)
+ 
++  sslverify : bool;
++  (** This is true except when the libvirt URI had [?no_verify=1] in
++      the parameters. *)
++}
++(** The "remote resource" is the structure returned by the {!map_source}
++    function. *)
++
++val map_source : ?readahead:int -> ?password:string -> string -> Xml.uri -> string -> string -> string -> remote_resource
++(** [map_source ?readahead ?password dcPath uri scheme server path]
++    maps the [<source path=...>] string to a {!remote_resource}
++    structure containing both an [https://] URL and a qemu URI,
++    both pointing the guest disk.
++
++    The input [path] comes from libvirt and will be something like:
+     ["[datastore1] Fedora 20/Fedora 20.vmdk"]
++    (including those literal spaces in the string).
+ 
+-    including those literal spaces in the string. *)
+-
+-val map_source_to_https : string -> Xml.uri -> string -> string -> string * bool
+-(** [map_source_to_https dcPath uri server path] is the same as
+-    {!map_source_to_uri} but it produces a regular [https://...] URL.
+-    The returned boolean is whether TLS certificate verification
+-    should be done. *)
++    This checks that the disk exists and that authentication is
++    correct, otherwise it will fail. *)
+-- 
+2.14.3
+

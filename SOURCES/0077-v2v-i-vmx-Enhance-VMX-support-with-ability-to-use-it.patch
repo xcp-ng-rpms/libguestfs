@@ -1,0 +1,619 @@
+From d45c983b7181946323ebd93cccf1100b45b55470 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 8 Dec 2017 10:43:45 +0000
+Subject: [PATCH] =?UTF-8?q?v2v:=20-i=20vmx:=20Enhance=20VMX=20support=20wi?=
+ =?UTF-8?q?th=20ability=20to=20use=20=E2=80=98-it=20ssh=E2=80=99=20transpo?=
+ =?UTF-8?q?rt.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This enhances the existing VMX input support allowing it to be
+used over SSH to the ESXi server.
+
+The original command (for local .vmx files) was:
+
+ $ virt-v2v -i vmx guest.vmx -o local -os /var/tmp
+
+Adding ‘-it ssh’ and using an SSH remote path gives the new syntax:
+
+ $ virt-v2v \
+     -i vmx -it ssh \
+     "ssh://root@esxi.example.com/vmfs/volumes/datastore1/guest/guest.vmx" \
+     -o local -os /var/tmp
+
+I anticipate that this input method will be widely used enough that it
+deserves its own example at the top of the man page.
+
+(cherry picked from commit 1d38216d20141cef9ce83ca4ddbe9c79f5da4f39)
+---
+ v2v/cmdline.ml              |  26 ++++--
+ v2v/input_libvirt_other.ml  |   9 ---
+ v2v/input_libvirt_other.mli |   1 -
+ v2v/input_vmx.ml            | 193 +++++++++++++++++++++++++++++++++++++-------
+ v2v/input_vmx.mli           |   5 +-
+ v2v/utils.ml                |   9 +++
+ v2v/utils.mli               |   2 +
+ v2v/virt-v2v.pod            | 106 ++++++++++++++++++++----
+ 8 files changed, 290 insertions(+), 61 deletions(-)
+
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index 81562d1f5..dfcc77ecd 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -276,6 +276,7 @@ read the man page virt-v2v(1).
+   let input_transport =
+     match !input_transport with
+     | None -> None
++    | Some "ssh" -> Some `SSH
+     | Some "vddk" -> Some `VDDK
+     | Some transport ->
+        error (f_"unknown input transport ‘-it %s’") transport in
+@@ -341,7 +342,8 @@ read the man page virt-v2v(1).
+    * should not be used.
+    *)
+   (match input_transport with
+-   | None ->
++   | None
++   | Some `SSH ->
+       if !vddk_config <> None ||
+          !vddk_cookie <> None ||
+          !vddk_libdir <> None ||
+@@ -379,6 +381,12 @@ read the man page virt-v2v(1).
+         | [guest] -> guest
+         | _ ->
+           error (f_"expecting a libvirt guest name on the command line") in
++      let input_transport =
++        match input_transport with
++        | None -> None
++        | Some `VDDK -> Some `VDDK
++        | Some `SSH ->
++           error (f_"only ‘-it vddk’ can be used here") in
+       Input_libvirt.input_libvirt vddk_options password
+                                   input_conn input_transport guest
+ 
+@@ -401,13 +409,19 @@ read the man page virt-v2v(1).
+       Input_ova.input_ova filename
+ 
+     | `VMX ->
+-      (* -i vmx: Expecting an vmx filename. *)
+-      let filename =
++      (* -i vmx: Expecting a vmx filename or SSH remote path. *)
++      let arg =
+         match args with
+-        | [filename] -> filename
++        | [arg] -> arg
+         | _ ->
+-          error (f_"expecting a VMX file name on the command line") in
+-      Input_vmx.input_vmx filename in
++          error (f_"expecting a single VMX file name or SSH remote path on the command line") in
++      let input_transport =
++        match input_transport with
++        | None -> None
++        | Some `SSH -> Some `SSH
++        | Some `VDDK ->
++           error (f_"only ‘-it ssh’ can be used here") in
++      Input_vmx.input_vmx input_transport arg in
+ 
+   (* Prevent use of --in-place option in RHEL. *)
+   if in_place then
+diff --git a/v2v/input_libvirt_other.ml b/v2v/input_libvirt_other.ml
+index dc16cb11b..a487a2b76 100644
+--- a/v2v/input_libvirt_other.ml
++++ b/v2v/input_libvirt_other.ml
+@@ -39,15 +39,6 @@ let error_if_libvirt_does_not_support_json_backingfile () =
+        Libvirt_utils.libvirt_get_version () < (2, 1, 0) then
+     error (f_"because of libvirt bug https://bugzilla.redhat.com/1134878 you must EITHER upgrade to libvirt >= 2.1.0 OR set this environment variable:\n\nexport LIBGUESTFS_BACKEND=direct\n\nand then rerun the virt-v2v command.")
+ 
+-(* xen+ssh URLs use the SSH driver in CURL.  Currently this requires
+- * ssh-agent authentication.  Give a clear error if this hasn't been
+- * set up (RHBZ#1139973).
+- *)
+-let error_if_no_ssh_agent () =
+-  try ignore (Sys.getenv "SSH_AUTH_SOCK")
+-  with Not_found ->
+-    error (f_"ssh-agent authentication has not been set up ($SSH_AUTH_SOCK is not set).  Please read \"INPUT FROM RHEL 5 XEN\" in the virt-v2v(1) man page.")
+-
+ (* Superclass. *)
+ class virtual input_libvirt (password : string option) libvirt_uri guest =
+ object
+diff --git a/v2v/input_libvirt_other.mli b/v2v/input_libvirt_other.mli
+index 494ca908a..8b1e8aa1d 100644
+--- a/v2v/input_libvirt_other.mli
++++ b/v2v/input_libvirt_other.mli
+@@ -19,7 +19,6 @@
+ (** [-i libvirt] source. *)
+ 
+ val error_if_libvirt_does_not_support_json_backingfile : unit -> unit
+-val error_if_no_ssh_agent : unit -> unit
+ 
+ class virtual input_libvirt : string option -> string option -> string -> object
+   method precheck : unit -> unit
+diff --git a/v2v/input_vmx.ml b/v2v/input_vmx.ml
+index a4f77c2ab..092a7b70c 100644
+--- a/v2v/input_vmx.ml
++++ b/v2v/input_vmx.ml
+@@ -19,6 +19,7 @@
+ open Printf
+ open Scanf
+ 
++open Unix_utils
+ open Common_gettext.Gettext
+ open Common_utils
+ 
+@@ -26,10 +27,86 @@ open Types
+ open Utils
+ open Name_from_disk
+ 
+-external identity : 'a -> 'a = "%identity"
++type vmx_source =
++  | File of string              (* local file or NFS *)
++  | SSH of Xml.uri              (* SSH URI *)
+ 
+-let rec find_disks vmx vmx_filename =
+-  find_scsi_disks vmx vmx_filename @ find_ide_disks vmx vmx_filename
++(* The single filename on the command line is intepreted either as
++ * a local file or a remote SSH URI (only if ‘-it ssh’).
++ *)
++let vmx_source_of_arg input_transport arg =
++  match input_transport, arg with
++  | None, arg -> File arg
++  | Some `SSH, arg ->
++     let uri =
++       try Xml.parse_uri arg
++       with Invalid_argument _ ->
++         error (f_"remote vmx ‘%s’ could not be parsed as a URI") arg in
++     if uri.Xml.uri_scheme <> None && uri.Xml.uri_scheme <> Some "ssh" then
++       error (f_"vmx URI start with ‘ssh://...’");
++     if uri.Xml.uri_server = None then
++       error (f_"vmx URI remote server name omitted");
++     if uri.Xml.uri_path = None || uri.Xml.uri_path = Some "/" then
++       error (f_"vmx URI path component looks incorrect");
++     SSH uri
++
++(* Return various fields from the URI.  The checks in vmx_source_of_arg
++ * should ensure that none of these assertions fail.
++ *)
++let port_of_uri { Xml.uri_port } =
++  match uri_port with i when i <= 0 -> None | i -> Some i
++let server_of_uri { Xml.uri_server } =
++  match uri_server with None -> assert false | Some s -> s
++let path_of_uri { Xml.uri_path } =
++  match uri_path with None -> assert false | Some p -> p
++
++(* 'scp' a remote file into a temporary local file, returning the path
++ * of the temporary local file.
++ *)
++let scp_from_remote_to_temporary uri tmpdir filename =
++  let localfile = tmpdir // filename in
++
++  let cmd =
++    sprintf "scp%s%s %s%s:%s %s"
++            (if verbose () then "" else " -q")
++            (match port_of_uri uri with
++             | None -> ""
++             | Some port -> sprintf " -P %d" port)
++            (match uri.Xml.uri_user with
++             | None -> ""
++             | Some user -> quote user ^ "@")
++            (quote (server_of_uri uri))
++            (* The double quoting of the path is counter-intuitive
++             * but correct, see:
++             * https://stackoverflow.com/questions/19858176/how-to-escape-spaces-in-path-during-scp-copy-in-linux
++             *)
++            (quote (quote (path_of_uri uri)))
++            (quote localfile) in
++  if verbose () then
++    eprintf "%s\n%!" cmd;
++  if Sys.command cmd <> 0 then
++    error (f_"could not copy the VMX file from the remote server, see earlier error messages");
++  localfile
++
++(* Test if [path] exists on the remote server. *)
++let remote_file_exists uri path =
++  let cmd =
++    sprintf "ssh%s %s%s test -f %s"
++            (match port_of_uri uri with
++             | None -> ""
++             | Some port -> sprintf " -p %d" port)
++            (match uri.Xml.uri_user with
++             | None -> ""
++             | Some user -> quote user ^ "@")
++            (quote (server_of_uri uri))
++            (* Double quoting is necessary here, see above. *)
++            (quote (quote path)) in
++  if verbose () then
++    eprintf "%s\n%!" cmd;
++  Sys.command cmd = 0
++
++let rec find_disks vmx vmx_source =
++  find_scsi_disks vmx vmx_source @ find_ide_disks vmx vmx_source
+ 
+ (* Find all SCSI hard disks.
+  *
+@@ -39,7 +116,7 @@ let rec find_disks vmx vmx_filename =
+  *                        | omitted
+  *   scsi0:0.fileName = "guest.vmdk"
+  *)
+-and find_scsi_disks vmx vmx_filename =
++and find_scsi_disks vmx vmx_source =
+   let get_scsi_controller_target ns =
+     sscanf ns "scsi%d:%d" (fun c t -> c, t)
+   in
+@@ -51,7 +128,7 @@ and find_scsi_disks vmx vmx_filename =
+                             Some "scsi-harddisk"; None ] in
+   let scsi_controller = Source_SCSI in
+ 
+-  find_hdds vmx vmx_filename
++  find_hdds vmx vmx_source
+             get_scsi_controller_target is_scsi_controller_target
+             scsi_device_types scsi_controller
+ 
+@@ -61,7 +138,7 @@ and find_scsi_disks vmx vmx_filename =
+  *   ide0:0.deviceType = "ata-hardDisk"
+  *   ide0:0.fileName = "guest.vmdk"
+  *)
+-and find_ide_disks vmx vmx_filename =
++and find_ide_disks vmx vmx_source =
+   let get_ide_controller_target ns =
+     sscanf ns "ide%d:%d" (fun c t -> c, t)
+   in
+@@ -72,11 +149,11 @@ and find_ide_disks vmx vmx_filename =
+   let ide_device_types = [ Some "ata-harddisk" ] in
+   let ide_controller = Source_IDE in
+ 
+-  find_hdds vmx vmx_filename
++  find_hdds vmx vmx_source
+             get_ide_controller_target is_ide_controller_target
+             ide_device_types ide_controller
+ 
+-and find_hdds vmx vmx_filename
++and find_hdds vmx vmx_source
+               get_controller_target is_controller_target
+               device_types controller =
+   (* Find namespaces matching '(ide|scsi)X:Y' with suitable deviceType. *)
+@@ -105,9 +182,9 @@ and find_hdds vmx vmx_filename
+         match path, v with
+         | [ns; "filename"], Some filename ->
+            let c, t = get_controller_target ns in
++           let uri, format = qemu_uri_of_filename vmx_source filename in
+            let s = { s_disk_id = (-1);
+-                     s_qemu_uri = qemu_uri_of_filename vmx_filename filename;
+-                     s_format = Some "vmdk";
++                     s_qemu_uri = uri; s_format = Some format;
+                      s_controller = Some controller } in
+            Some (c, t, s)
+         | _ -> None
+@@ -129,17 +206,54 @@ and find_hdds vmx vmx_filename
+ (* The filename can be an absolute path, but is more often a
+  * path relative to the location of the vmx file.
+  *
+- * Note that we always end up with an absolute path, which is
+- * also useful because it means we won't have any paths that
+- * could be misinterpreted by qemu.
++ * This constructs a QEMU URI of the filename relative to the
++ * vmx file (which might be remote over SSH).
+  *)
+-and qemu_uri_of_filename vmx_filename filename =
+-  if not (Filename.is_relative filename) then
+-    filename
+-  else (
+-    let dir = Filename.dirname (absolute_path vmx_filename) in
+-    dir // filename
+-  )
++and qemu_uri_of_filename vmx_source filename =
++  match vmx_source with
++  | File vmx_filename ->
++     (* Always ensure this returns an absolute path to avoid
++      * any confusion with filenames containing colons.
++      *)
++     absolute_path_from_other_file vmx_filename filename, "vmdk"
++
++  | SSH uri ->
++     let vmx_path = path_of_uri uri in
++     let abs_path = absolute_path_from_other_file vmx_path filename in
++     let format = "vmdk" in
++
++     (* XXX This is a hack to work around qemu / VMDK limitation
++      *   "Cannot use relative extent paths with VMDK descriptor file"
++      * We can remove this if the above is fixed.
++      *)
++     let abs_path, format =
++       let flat_vmdk =
++         Str.replace_first (Str.regexp "\\.vmdk$") "-flat.vmdk" abs_path in
++       if remote_file_exists uri flat_vmdk then (flat_vmdk, "raw")
++       else (abs_path, format) in
++
++     let json_params = [
++       "file.driver", JSON.String "ssh";
++       "file.path", JSON.String abs_path;
++       "file.host", JSON.String (server_of_uri uri);
++       "file.host_key_check", JSON.String "no";
++     ] in
++     let json_params =
++       match uri.Xml.uri_user with
++       | None -> json_params
++       | Some user ->
++          ("file.user", JSON.String user) :: json_params in
++     let json_params =
++       match port_of_uri uri with
++       | None -> json_params
++       | Some port ->
++          ("file.port", JSON.Int port) :: json_params in
++
++     "json:" ^ JSON.string_of_doc json_params, format
++
++and absolute_path_from_other_file other_filename filename =
++  if not (Filename.is_relative filename) then filename
++  else (Filename.dirname (absolute_path other_filename)) // filename
+ 
+ (* Find all removable disks.
+  *
+@@ -272,21 +386,46 @@ and find_nics vmx =
+   let nics = List.map (fun (_, source) -> source) nics in
+   nics
+ 
+-class input_vmx vmx_filename = object
++class input_vmx input_transport arg =
++  let tmpdir =
++    let base_dir = (open_guestfs ())#get_cachedir () in
++    let t = Mkdtemp.temp_dir ~base_dir "vmx." in
++    rmdir_on_exit t;
++    t in
++object
+   inherit input
+ 
+-  method as_options = "-i vmx " ^ vmx_filename
++  method as_options = "-i vmx " ^ arg
++
++  method precheck () =
++    match input_transport with
++    | None -> ()
++    | Some `SSH ->
++       if backend_is_libvirt () then
++         error (f_"because libvirtd doesn't pass the SSH_AUTH_SOCK environment variable to qemu you must set this environment variable:\n\nexport LIBGUESTFS_BACKEND=direct\n\nand then rerun the virt-v2v command.");
++       error_if_no_ssh_agent ()
+ 
+   method source () =
+-    (* Parse the VMX file. *)
+-    let vmx = Parse_vmx.parse_file vmx_filename in
++    let vmx_source = vmx_source_of_arg input_transport arg in
++
++    (* If the transport is SSH, fetch the file from remote, else
++     * parse it from local.
++     *)
++    let vmx =
++      match vmx_source with
++      | File filename -> Parse_vmx.parse_file filename
++      | SSH uri ->
++         let filename = scp_from_remote_to_temporary uri tmpdir "source.vmx" in
++         Parse_vmx.parse_file filename in
+ 
+     let name =
+       match Parse_vmx.get_string vmx ["displayName"] with
++      | Some s -> s
+       | None ->
+          warning (f_"no displayName key found in VMX file");
+-         name_from_disk vmx_filename
+-      | Some s -> s in
++         match vmx_source with
++         | File filename -> name_from_disk filename
++         | SSH uri -> name_from_disk (path_of_uri uri) in
+ 
+     let memory_mb =
+       match Parse_vmx.get_int64 vmx ["memSize"] with
+@@ -325,7 +464,7 @@ class input_vmx vmx_filename = object
+          None
+       | None -> None in
+ 
+-    let disks = find_disks vmx vmx_filename in
++    let disks = find_disks vmx vmx_source in
+     let removables = find_removables vmx in
+     let nics = find_nics vmx in
+ 
+diff --git a/v2v/input_vmx.mli b/v2v/input_vmx.mli
+index f236f8716..34ec2a5c6 100644
+--- a/v2v/input_vmx.mli
++++ b/v2v/input_vmx.mli
+@@ -18,5 +18,6 @@
+ 
+ (** [-i vmx] source. *)
+ 
+-val input_vmx : string -> Types.input
+-(** [input_vmx filename] sets up an input from vmware vmx file. *)
++val input_vmx : [`SSH] option -> string -> Types.input
++(** [input_vmx input_transport arg] sets up an input
++    from vmware vmx file. *)
+diff --git a/v2v/utils.ml b/v2v/utils.ml
+index 2061eea61..158077bf6 100644
+--- a/v2v/utils.ml
++++ b/v2v/utils.ml
+@@ -127,6 +127,15 @@ let backend_is_libvirt () =
+   let backend = fst (String.split ":" backend) in
+   backend = "libvirt"
+ 
++(* When using the SSH driver in qemu (currently) this requires
++ * ssh-agent authentication.  Give a clear error if this hasn't been
++ * set up (RHBZ#1139973).  This might improve if we switch to libssh1.
++ *)
++let error_if_no_ssh_agent () =
++  try ignore (Sys.getenv "SSH_AUTH_SOCK")
++  with Not_found ->
++    error (f_"ssh-agent authentication has not been set up ($SSH_AUTH_SOCK is not set).  This is required by qemu to do passwordless ssh access.  See the virt-v2v(1) man page for more information.")
++
+ let find_file_in_tar tar filename =
+   let lines = external_command (sprintf "tar tRvf %s" (Filename.quote tar)) in
+   let rec loop lines =
+diff --git a/v2v/utils.mli b/v2v/utils.mli
+index b2fd0be1b..042454565 100644
+--- a/v2v/utils.mli
++++ b/v2v/utils.mli
+@@ -61,6 +61,8 @@ val qemu_img_supports_offset_and_size : unit -> bool
+ val backend_is_libvirt : unit -> bool
+ (** Return true iff the current backend is libvirt. *)
+ 
++val error_if_no_ssh_agent : unit -> unit
++
+ val find_file_in_tar : string -> string -> int64 * int64
+ (** [find_file_in_tar tar filename] looks up file in [tar] archive and returns
+     a tuple containing at which byte it starts and how long the file is.
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 7aca22b3c..d0387734a 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -113,6 +113,23 @@ Note that after conversion, the guest will appear in the RHV-M Export
+ Storage Domain, from where you will need to import it using the RHV-M
+ user interface.  (See L</OUTPUT TO RHV>).
+ 
++=head2 Convert from ESXi hypervisor over SSH to local libvirt
++
++You have an ESXi hypervisor called C<esxi.example.com> with SSH access
++enabled.  You want to convert from VMFS storage on that server to
++a local file.
++
++ virt-v2v \
++   -i vmx -it ssh \
++   "root@esxi.example.com/vmfs/volumes/datastore1/guest/guest.vmx" \
++   -o local -os /var/tmp
++
++The guest must not be running.  Virt-v2v would I<not> need to be run
++as root in this case.
++
++For more information about converting from VMX files see
++L</INPUT FROM VMWARE VMX> below.
++
+ =head2 Convert disk image to OpenStack glance
+ 
+ Given a disk image from another hypervisor that you want to convert to
+@@ -233,9 +250,10 @@ L</INPUT FROM VMWARE OVA> below
+ 
+ Set the input method to I<vmx>.
+ 
+-In this mode you can read a VMware vmx file directly.  This is useful
+-when VMware VMs are stored on an NFS server which you can mount
+-directly.  See L</INPUT FROM VMWARE VMX> below
++In this mode you can read a VMware vmx file directly or over SSH.
++This is useful when VMware VMs are stored on an NFS server which you
++can mount directly, or where you have access by SSH to an ESXi
++hypervisor.  See L</INPUT FROM VMWARE VMX> below
+ 
+ =item B<-ic> libvirtURI
+ 
+@@ -255,6 +273,11 @@ For I<-i disk> only, this specifies the format of the input disk
+ image.  For other input methods you should specify the input
+ format in the metadata.
+ 
++=item B<-it> B<ssh>
++
++When using I<-i vmx>, this enables the ssh transport.
++See L</INPUT FROM VMWARE VMX> below.
++
+ =item B<-it> B<vddk>
+ 
+ Use VMware VDDK as a transport to copy the input disks.  See
+@@ -1194,9 +1217,23 @@ directory containing the files:
+ 
+ =head1 INPUT FROM VMWARE VMX
+ 
+-Virt-v2v is able to import guests from VMware’s vmx files.  This is
+-useful where VMware virtual machines are stored on a separate NFS
+-server and you are able to mount the NFS storage directly.
++Virt-v2v is able to import guests from VMware’s vmx files.
++
++This is useful in two cases:
++
++=over 4
++
++=item 1.
++
++VMware virtual machines are stored on a separate NFS server and you
++are able to mount the NFS storage directly.
++
++=item 2.
++
++You have enabled SSH access to the VMware ESXi hypervisor and there is
++a C</vmfs/volumes> folder containing the virtual machines.
++
++=back
+ 
+ If you find a folder of files called F<I<guest>.vmx>,
+ F<I<guest>.vmxf>, F<I<guest>.nvram> and one or more F<.vmdk> disk
+@@ -1222,28 +1259,65 @@ With other methods, virt-v2v tries to prevent concurrent access, but
+ because the I<-i vmx> method works directly against the storage,
+ checking for concurrent access is not possible.
+ 
+-=head2 VMX: MOUNT THE NFS STORAGE ON THE CONVERSION SERVER
++=head2 VMX: ACCESS TO THE STORAGE CONTAINING THE VMX AND VMDK FILES
+ 
+-Virt-v2v must be able to access the F<.vmx> file and any local
+-F<.vmdk> disks.  Normally this means you must mount the NFS storage
+-containing these files.
++If the vmx and vmdk files aren't available locally then you must
++I<either> mount the NFS storage on the conversion server I<or> enable
++passwordless SSH on the ESXi hypervisor.
++
++=head3 VMX: Passwordless SSH using ssh-agent
++
++You must also use ssh-agent, and add your ssh public key to
++F</etc/ssh/keys-root/authorized_keys> (on the ESXi hypervisor).
++
++After doing this, you should check that passwordless access works from
++the virt-v2v server to the ESXi hypervisor.  For example:
++
++ $ ssh root@esxi.example.com
++ [ logs straight into the shell, no password is requested ]
++
++Note that password-interactive and Kerberos access are B<not>
++supported.  You B<have> to set up ssh access using ssh-agent and
++authorized_keys.
++
++=head3 VMX: Construct the SSH URI
++
++When using the SSH input transport you must specify a remote
++C<ssh://...> URI pointing to the VMX file.  A typical URI looks like:
++
++ ssh://root@esxi.example.com/vmfs/volumes/datastore1/my%20guest/my%20guest.vmx
++
++Any space must be escaped with C<%20> and other non-ASCII characters
++may also need to be URI-escaped.
++
++The username is not required if it is the same as your local username.
++
++You may optionally supply a port number after the hostname if the SSH
++server is not listening on the default port (22).
+ 
+ =head2 VMX: IMPORTING A GUEST
+ 
+-To import a vmx file, do:
++To import a vmx file from a local file or NFS, do:
+ 
+  $ virt-v2v -i vmx guest.vmx -o local -os /var/tmp
+ 
++To import a vmx file over SSH, add I<-it ssh> to select the SSH
++transport and supply a remote SSH URI:
++
++ $ virt-v2v \
++     -i vmx -it ssh \
++     "ssh://root@esxi.example.com/vmfs/volumes/datastore1/guest/guest.vmx" \
++     -o local -os /var/tmp
++
+ Virt-v2v processes the vmx file and uses it to find the location of
+ any vmdk disks.
+ 
+ =head1 INPUT FROM VMWARE ESXi HYPERVISOR
+ 
+-Virt-v2v cannot access an ESXi hypervisor directly.  You should use
+-the OVA or VMX methods above (see L</INPUT FROM VMWARE OVA> and/or
+-L</INPUT FROM VMWARE VMX>) if possible, as it is much faster and
+-requires much less disk space than the method described in this
+-section.
++You should use the OVA or VMX methods above (see L</INPUT FROM VMWARE
++OVA> and/or L</INPUT FROM VMWARE VMX>) if possible, as it is much
++faster and requires much less disk space than the method described in
++this section.
+ 
+ You can use the L<virt-v2v-copy-to-local(1)> tool to copy the guest
+ off the hypervisor into a local file, and then convert it.
+-- 
+2.14.3
+

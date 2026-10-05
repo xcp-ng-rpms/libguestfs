@@ -1,0 +1,26 @@
+From 1dc3311d91d3d0caa2796ea5b52e07d84b2d3a90 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 17 May 2017 11:24:39 +0200
+Subject: [PATCH] s390x: appliance: Use /dev/ttysclp0 for serial console.
+
+(cherry picked from commit 5fc76d6d10a1095c9301edbf4716114e4e94882c)
+---
+ lib/appliance-kcmdline.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lib/appliance-kcmdline.c b/lib/appliance-kcmdline.c
+index 4dde7a865..ff7bda494 100644
+--- a/lib/appliance-kcmdline.c
++++ b/lib/appliance-kcmdline.c
+@@ -44,6 +44,8 @@
+ #define SERIAL_CONSOLE "console=hvc0 console=ttyS0"
+ #elif defined(__arm__) || defined(__aarch64__)
+ #define SERIAL_CONSOLE "console=ttyAMA0"
++#elif defined(__s390x__)
++#define SERIAL_CONSOLE "console=ttysclp0"
+ #else
+ #define SERIAL_CONSOLE "console=ttyS0"
+ #endif
+-- 
+2.14.3
+

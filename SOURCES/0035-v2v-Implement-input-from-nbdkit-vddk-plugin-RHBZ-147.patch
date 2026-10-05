@@ -1,0 +1,763 @@
+From 9542f12a306e05b73f5c4ecd4e4e61e03797098a Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Wed, 30 Aug 2017 17:14:03 +0100
+Subject: [PATCH] v2v: Implement input from nbdkit vddk plugin (RHBZ#1477912).
+
+(cherry picked from commit bbda5a6a68846acf971e0f4cbf83cacfa083d6e9)
+---
+ v2v/Makefile.am            |   2 +
+ v2v/cmdline.ml             |  53 +++++++-
+ v2v/input_libvirt.ml       |  16 ++-
+ v2v/input_libvirt.mli      |   8 +-
+ v2v/input_libvirt_vddk.ml  | 314 +++++++++++++++++++++++++++++++++++++++++++++
+ v2v/input_libvirt_vddk.mli |  24 ++++
+ v2v/types.ml               |  12 ++
+ v2v/types.mli              |  13 ++
+ v2v/virt-v2v.pod           | 155 ++++++++++++++++++++++
+ 9 files changed, 588 insertions(+), 9 deletions(-)
+ create mode 100644 v2v/input_libvirt_vddk.ml
+ create mode 100644 v2v/input_libvirt_vddk.mli
+
+diff --git a/v2v/Makefile.am b/v2v/Makefile.am
+index 0df759eca..87776a509 100644
+--- a/v2v/Makefile.am
++++ b/v2v/Makefile.am
+@@ -35,6 +35,7 @@ SOURCES_MLI = \
+ 	input_libvirt.mli \
+ 	input_libvirt_other.mli \
+ 	input_libvirt_vcenter_https.mli \
++	input_libvirt_vddk.mli \
+ 	input_libvirt_xen_ssh.mli \
+ 	input_libvirtxml.mli \
+ 	input_ova.mli \
+@@ -89,6 +90,7 @@ SOURCES_ML = \
+ 	input_libvirtxml.ml \
+ 	input_libvirt_other.ml \
+ 	input_libvirt_vcenter_https.ml \
++	input_libvirt_vddk.ml \
+ 	input_libvirt_xen_ssh.ml \
+ 	input_libvirt.ml \
+ 	input_ova.ml \
+diff --git a/v2v/cmdline.ml b/v2v/cmdline.ml
+index 6b105886c..3050104d0 100644
+--- a/v2v/cmdline.ml
++++ b/v2v/cmdline.ml
+@@ -63,6 +63,15 @@ let parse_cmdline () =
+   let output_name = ref None in
+   let output_storage = ref None in
+   let password_file = ref None in
++  let vddk = ref None in
++  let vddk_config = ref None in
++  let vddk_cookie = ref None in
++  let vddk_nfchostport = ref None in
++  let vddk_port = ref None in
++  let vddk_snapshot = ref None in
++  let vddk_thumbprint = ref None in
++  let vddk_transports = ref None in
++  let vddk_vimapiver = ref None in
+   let vdsm_vm_uuid = ref None in
+   let vdsm_ovf_output = ref None in (* default "." *)
+ 
+@@ -201,6 +210,24 @@ let parse_cmdline () =
+                                             s_"Use password from file";
+     [ L"print-source" ], Getopt.Set print_source, s_"Print source and stop";
+     [ L"root" ],    Getopt.String ("ask|... ", set_root_choice), s_"How to choose root filesystem";
++    [ L"vddk" ],     Getopt.String ("libpath", set_string_option_once "--vddk" vddk),
++                                            s_"Use nbdkit VDDK plugin";
++    [ L"vddk-config" ], Getopt.String ("filename", set_string_option_once "--vddk-config" vddk_config),
++                                            s_"Set VDDK config file";
++    [ L"vddk-cookie" ], Getopt.String ("cookie", set_string_option_once "--vddk-cookie" vddk_cookie),
++                                            s_"Set VDDK cookie";
++    [ L"vddk-nfchostport" ], Getopt.String ("nfchostport", set_string_option_once "--vddk-nfchostport" vddk_nfchostport),
++                                            s_"Set VDDK nfchostport";
++    [ L"vddk-port" ], Getopt.String ("port", set_string_option_once "--vddk-port" vddk_port),
++                                            s_"Set VDDK port";
++    [ L"vddk-snapshot" ], Getopt.String ("snapshot-moref", set_string_option_once "--vddk-snapshot" vddk_snapshot),
++                                            s_"Set VDDK snapshot";
++    [ L"vddk-thumbprint" ], Getopt.String ("thumbprint", set_string_option_once "--vddk-thumbprint" vddk_thumbprint),
++                                            s_"Set VDDK thumbprint";
++    [ L"vddk-transports" ], Getopt.String ("transports", set_string_option_once "--vddk-transports" vddk_transports),
++                                            s_"Set VDDK transports";
++    [ L"vddk-vimapiver" ], Getopt.String ("apiver", set_string_option_once "--vddk-vimapiver" vddk_vimapiver),
++                                            s_"Set VDDK vimapiver";
+     [ L"vdsm-compat" ], Getopt.Symbol ("0.10|1.1", ["0.10"; "1.1"], set_vdsm_compat), s_"Write qcow2 with compat=0.10|1.1";
+     [ L"vdsm-image-uuid" ], Getopt.String ("uuid", add_vdsm_image_uuid), s_"Output image UUID(s)";
+     [ L"vdsm-vol-uuid" ], Getopt.String ("uuid", add_vdsm_vol_uuid), s_"Output vol UUID(s)";
+@@ -263,6 +290,29 @@ read the man page virt-v2v(1).
+   let print_source = !print_source in
+   let qemu_boot = !qemu_boot in
+   let root_choice = !root_choice in
++  let vddk_options =
++    match !vddk with
++    | Some libdir ->
++      Some { vddk_libdir = libdir;
++             vddk_config = !vddk_config;
++             vddk_cookie = !vddk_cookie;
++             vddk_nfchostport = !vddk_nfchostport;
++             vddk_port = !vddk_port;
++             vddk_snapshot = !vddk_snapshot;
++             vddk_thumbprint = !vddk_thumbprint;
++             vddk_transports = !vddk_transports;
++             vddk_vimapiver = !vddk_vimapiver }
++    | None ->
++      if !vddk_config <> None ||
++         !vddk_cookie <> None ||
++         !vddk_nfchostport <> None ||
++         !vddk_port <> None ||
++         !vddk_snapshot <> None ||
++         !vddk_thumbprint <> None ||
++         !vddk_transports <> None ||
++         !vddk_vimapiver <> None then
++        error (f_"‘--vddk-*’ options should only be used when conversion via the nbdkit VDDK plugin has been enabled, ie. using ‘--vddk’.");
++      None in
+   let vdsm_compat = !vdsm_compat in
+   let vdsm_image_uuids = List.rev !vdsm_image_uuids in
+   let vdsm_vol_uuids = List.rev !vdsm_vol_uuids in
+@@ -278,6 +328,7 @@ read the man page virt-v2v(1).
+     printf "libguestfs-rewrite\n";
+     printf "vcenter-https\n";
+     printf "xen-ssh\n";
++    printf "vddk\n";
+     printf "colours-option\n";
+     printf "vdsm-compat-option\n";
+     List.iter (printf "input:%s\n") (Modules_list.input_modules ());
+@@ -316,7 +367,7 @@ read the man page virt-v2v(1).
+         | [guest] -> guest
+         | _ ->
+           error (f_"expecting a libvirt guest name on the command line") in
+-      Input_libvirt.input_libvirt dcpath password input_conn guest
++      Input_libvirt.input_libvirt dcpath vddk_options password input_conn guest
+ 
+     | `LibvirtXML ->
+       (* -i libvirtxml: Expecting a filename (XML file). *)
+diff --git a/v2v/input_libvirt.ml b/v2v/input_libvirt.ml
+index 0bc386430..e8143b6ad 100644
+--- a/v2v/input_libvirt.ml
++++ b/v2v/input_libvirt.ml
+@@ -27,7 +27,7 @@ open Types
+ open Utils
+ 
+ (* Choose the right subclass based on the URI. *)
+-let input_libvirt dcpath password libvirt_uri guest =
++let input_libvirt dcpath vddk_options password libvirt_uri guest =
+   match libvirt_uri with
+   | None ->
+     Input_libvirt_other.input_libvirt_other password libvirt_uri guest
+@@ -47,10 +47,18 @@ let input_libvirt dcpath password libvirt_uri guest =
+     | Some _, Some "" ->
+       Input_libvirt_other.input_libvirt_other password libvirt_uri guest
+ 
+-    (* vCenter over https *)
++    (* vCenter over https, or
++     * vCenter or ESXi using nbdkit vddk plugin
++     *)
+     | Some server, Some ("esx"|"gsx"|"vpx" as scheme) ->
+-      Input_libvirt_vcenter_https.input_libvirt_vcenter_https
+-        dcpath password libvirt_uri parsed_uri scheme server guest
++       (match vddk_options with
++        | None ->
++           Input_libvirt_vcenter_https.input_libvirt_vcenter_https
++             dcpath password libvirt_uri parsed_uri scheme server guest
++        | Some vddk_options ->
++           Input_libvirt_vddk.input_libvirt_vddk vddk_options password
++                                                 libvirt_uri parsed_uri guest
++       )
+ 
+     (* Xen over SSH *)
+     | Some server, Some ("xen+ssh" as scheme) ->
+diff --git a/v2v/input_libvirt.mli b/v2v/input_libvirt.mli
+index f5e6314d9..0a6aa3c54 100644
+--- a/v2v/input_libvirt.mli
++++ b/v2v/input_libvirt.mli
+@@ -18,7 +18,7 @@
+ 
+ (** [-i libvirt] source. *)
+ 
+-val input_libvirt : string option -> string option -> string option -> string -> Types.input
+-(** [input_libvirt dcpath password libvirt_uri guest] creates and returns a
+-    new {!Types.input} object specialized for reading input from
+-    libvirt sources. *)
++val input_libvirt : string option -> Types.vddk_options option -> string option -> string option -> string -> Types.input
++(** [input_libvirt dcpath vddk_options password libvirt_uri guest] creates
++    and returns a new {!Types.input} object specialized for reading input
++    from libvirt sources. *)
+diff --git a/v2v/input_libvirt_vddk.ml b/v2v/input_libvirt_vddk.ml
+new file mode 100644
+index 000000000..89d2552f6
+--- /dev/null
++++ b/v2v/input_libvirt_vddk.ml
+@@ -0,0 +1,314 @@
++(* virt-v2v
++ * Copyright (C) 2009-2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++(** [-i libvirt] when the source is VMware via nbdkit vddk plugin *)
++
++open Unix
++
++open Common_gettext.Gettext
++open Common_utils
++open Unix_utils
++
++open Types
++open Utils
++open Input_libvirt_other
++open Parse_libvirt_xml
++open Xpath_helpers
++
++open Printf
++
++(* Subclass specialized for handling VMware via nbdkit vddk plugin. *)
++class input_libvirt_vddk vddk_options password libvirt_uri parsed_uri guest =
++
++  (* The VDDK path. *)
++  let libdir = vddk_options.vddk_libdir in
++  (* Compute the LD_LIBRARY_PATH that we must pass to nbdkit. *)
++  let library_path = libdir // sprintf "lib%d" Sys.word_size in
++
++  (* Is SELinux enabled and enforcing on the host? *)
++  let have_selinux =
++    0 = Sys.command "getenforce 2>/dev/null | grep -isq Enforcing" in
++
++  (* Check that the VDDK path looks reasonable. *)
++  let error_unless_vddk_libdir () =
++    if not (is_directory libdir) then
++      error (f_"‘--vddk %s’ does not point to a directory.  See \"INPUT FROM VDDK\" in the virt-v2v(1) manual.") libdir;
++
++    if not (is_directory library_path) then
++      error (f_"VDDK library path %s not found or not a directory.  See \"INPUT FROM VDDK\" in the virt-v2v(1) manual.")
++            library_path
++  in
++
++  (* Check that nbdkit is available and new enough. *)
++  let error_unless_nbdkit_working () =
++    if 0 <> Sys.command "nbdkit --version >/dev/null" then
++      error (f_"nbdkit is not installed or not working.  It is required to use ‘--vddk’.  See \"INPUT FROM VDDK\" in the virt-v2v(1) manual.");
++
++    (* Check it's a new enough version.  The latest features we
++     * require are ‘--exit-with-parent’ and ‘--selinux-label’, both
++     * added in 1.1.14.
++     *)
++    let lines = external_command "nbdkit --help" in
++    let lines = String.concat " " lines in
++    if String.find lines "exit-with-parent" == -1 ||
++       String.find lines "selinux-label" == -1 then
++      error (f_"nbdkit is not new enough, you need to upgrade to nbdkit ≥ 1.1.14")
++  in
++
++  (* Check that the VDDK plugin is installed and working *)
++  let error_unless_nbdkit_vddk_working () =
++    let cmd =
++      sprintf "LD_LIBRARY_PATH=%s nbdkit vddk --dump-plugin >/dev/null"
++              (quote library_path) in
++    if Sys.command cmd <> 0 then (
++      (* See if we can diagnose why ... *)
++      let cmd =
++        sprintf "LD_LIBRARY_PATH=%s LANG=C nbdkit vddk --dump-plugin 2>&1 | grep -sq libvixDiskLib.so"
++                (quote library_path) in
++      let needs_library = Sys.command cmd = 0 in
++      if not needs_library then
++        error (f_"nbdkit VDDK plugin is not installed or not working.  It is required if you want to use VDDK.
++
++The VDDK plugin is not enabled by default when you compile nbdkit.  You have to read the instructions in the nbdkit sources under ‘plugins/vddk/README.VDDK’ to find out how to enable the VDDK plugin.
++
++See also \"INPUT FROM VDDK\" in the virt-v2v(1) manual.")
++      else
++        error (f_"nbdkit VDDK plugin is not installed or not working.  It is required if you want to use VDDK.
++
++It looks like you did not set the right path in the ‘--vddk’ option, or your copy of the VDDK directory is incomplete.  There should be a library called ’%s/libvixDiskLib.so.?’.
++
++See also \"INPUT FROM VDDK\" in the virt-v2v(1) manual.") library_path
++    )
++  in
++
++  let error_unless_thumbprint () =
++    if vddk_options.vddk_thumbprint = None then
++      error (f_"You must pass the ‘--vddk-thumbprint’ option with the SSL thumbprint of the VMware server.  To find the thumbprint, see the nbdkit-vddk-plugin(1) manual.  See also \"INPUT FROM VDDK\" in the virt-v2v(1) manual.")
++  in
++
++object
++  inherit input_libvirt password libvirt_uri guest
++
++  method source () =
++    error_unless_vddk_libdir ();
++    error_unless_nbdkit_working ();
++    error_unless_nbdkit_vddk_working ();
++    error_unless_thumbprint ();
++
++    (* Get the libvirt XML.  This also checks (as a side-effect)
++     * that the domain is not running.  (RHBZ#1138586)
++     *)
++    let xml = Libvirt_utils.dumpxml ?password ?conn:libvirt_uri guest in
++    let source, disks = parse_libvirt_xml ?conn:libvirt_uri xml in
++
++    (* Find the <vmware:moref> element from the XML.  This was added
++     * in libvirt >= 3.7 and is required.
++     *)
++    let moref =
++      let doc = Xml.parse_memory xml in
++      let xpathctx = Xml.xpath_new_context doc in
++      Xml.xpath_register_ns xpathctx
++        "vmware" "http://libvirt.org/schemas/domain/vmware/1.0";
++      let xpath_string = xpath_string xpathctx in
++      match xpath_string "/domain/vmware:moref" with
++      | Some moref -> moref
++      | None ->
++         error (f_"<vmware:moref> was not found in the output of ‘virsh dumpxml \"%s\"’.  The most likely reason is that libvirt is too old, try upgrading libvirt to ≥ 3.7.") guest in
++
++    (* Create a temporary directory where we place the sockets and
++     * password file.
++     *)
++    let tmpdir =
++      let base_dir = (open_guestfs ())#get_cachedir () in
++      let t = Mkdtemp.temp_dir ~base_dir "vddk." in
++      (* tmpdir must be readable (but not writable) by "other" so that
++       * qemu can open the sockets.  If we place a password file in
++       * this directory then we'll chmod that to 0600 below.
++       *)
++      chmod t 0o755;
++      rmdir_on_exit t;
++      t in
++
++    (* Start constructing the parts of the incredibly long nbdkit
++     * command line which don't change between disks.
++     *)
++    let args =
++      let add_arg, get_args =
++        let args = ref [] in
++        let add_arg a = push_front a args in
++        let get_args () = List.rev !args in
++        add_arg, get_args in
++
++      (* It probably never happens that the server name can be missing
++       * from the libvirt URI, but we need a server name to pass to
++       * nbdkit, so ...
++       *)
++      let server =
++        match parsed_uri.Xml.uri_server with
++        | Some server -> server
++        | None ->
++           match libvirt_uri with
++           | Some libvirt_uri ->
++              error (f_"‘-ic %s’ URL does not contain a host name field")
++                    libvirt_uri
++           | None ->
++              error (f_"you must use the ‘-ic’ parameter.  See \"INPUT FROM VDDK\" in the virt-v2v(1) manual.") in
++
++      (* Similar to above, we also need a username to pass. *)
++      let user =
++        match parsed_uri.Xml.uri_user with
++        | Some user -> user
++        | None -> "root" (* ? *) in
++
++      add_arg "nbdkit";
++      if verbose () then add_arg "--verbose";
++      add_arg "--readonly";         (* important! readonly mode *)
++      add_arg "--foreground";       (* run in foreground *)
++      add_arg "--exit-with-parent"; (* exit when virt-v2v exits *)
++      add_arg "--newstyle";         (* use newstyle NBD protocol *)
++      add_arg "--exportname"; add_arg "/";
++      if have_selinux then (        (* label the socket so qemu can open it *)
++        add_arg "--selinux-label"; add_arg "system_u:object_r:svirt_t:s0"
++      );
++
++      (* Name of the plugin.  Everything following is a plugin parameter. *)
++      add_arg "vddk";
++
++      let password_param =
++        match password with
++        | None ->
++           (* nbdkit asks for the password interactively *)
++           "password=-"
++        | Some password ->
++           let password_file = tmpdir // "password" in
++           let chan = open_out password_file in
++           chmod password_file 0o600;
++           output_string chan password;
++           close_out chan;
++           (* nbdkit reads the password from the file *)
++           "password=+" ^ password_file in
++      add_arg (sprintf "server=%s" server);
++      add_arg (sprintf "user=%s" user);
++      add_arg password_param;
++      add_arg (sprintf "vm=moref=%s" moref);
++      add_arg (sprintf "libdir=%s" libdir);
++
++      (* The passthrough parameters. *)
++      let pt name = may (fun field -> add_arg (sprintf "%s=%s" name field)) in
++      pt "config" vddk_options.vddk_config;
++      pt "cookie" vddk_options.vddk_cookie;
++      pt "nfchostport" vddk_options.vddk_nfchostport;
++      pt "port" vddk_options.vddk_port;
++      pt "snapshot" vddk_options.vddk_snapshot;
++      pt "thumbprint" vddk_options.vddk_thumbprint;
++      pt "transports" vddk_options.vddk_transports;
++      pt "vimapiver" vddk_options.vddk_vimapiver;
++
++      get_args () in
++
++    (* Create an nbdkit instance for each disk and rewrite the source
++     * paths to point to the NBD socket.
++     *)
++    let disks = List.map (
++      function
++      | { p_source_disk = disk; p_source = P_dont_rewrite } ->
++         disk
++
++      | { p_source = P_source_dev _ } -> (* Should never happen. *)
++         error (f_"source disk has <source dev=...> attribute in XML")
++
++      | { p_source_disk = disk; p_source = P_source_file path } ->
++         (* The <source file=...> attribute returned by the libvirt
++          * VMX driver looks like "[datastore] path".  We can use it
++          * directly as the nbdkit file= parameter, and it is passed
++          * directly in this form to VDDK.
++          *)
++
++         let sock = tmpdir // sprintf "nbdkit%d.sock" disk.s_disk_id in
++         let qemu_uri = sprintf "nbd:unix:%s:exportname=/" sock in
++
++         let pidfile = tmpdir // sprintf "nbdkit%d.pid" disk.s_disk_id in
++
++         (* Construct the final command line with the "static" args
++          * above plus the args which vary for each disk.
++          *)
++         let args =
++           args @ [ "--pidfile"; pidfile;
++                    "--unix"; sock;
++                    sprintf "file=%s" path ] in
++         let args = Array.of_list args in
++
++         (* Start an nbdkit instance in the background.  By using
++          * --exit-with-parent we don't have to worry about cleaning
++          * it up, hopefully.
++          *)
++         let pid = fork () in
++         if pid = 0 then (
++           (* Child process (nbdkit). *)
++           putenv "LD_LIBRARY_PATH" library_path;
++           execvp "nbdkit" args
++         );
++
++         (* Wait for the pidfile to appear so we know that nbdkit
++          * is listening for requests.
++          *)
++         let rec loop i =
++           if i = 0 then false
++           else if Sys.file_exists pidfile then true
++           else (
++             sleep 1;
++             loop (i-1)
++           )
++         in
++         if not (loop 30) then (
++           if verbose () then
++             error (f_"nbdkit did not start up.  See previous debugging messages for problems.")
++           else
++             error (f_"nbdkit did not start up.  There may be errors printed by nbdkit above.
++
++If the messages above are not sufficient to diagnose the problem then add the ‘virt-v2v -v -x’ options and examine the debugging output carefully.")
++         );
++
++         if have_selinux then (
++           (* Note that Unix domain sockets have both a file label and
++            * a socket/process label.  Using --selinux-label above
++            * only set the socket label, but we must also set the file
++            * label.
++            *)
++           ignore (
++               run_command ["chcon"; "system_u:object_r:svirt_image_t:s0";
++                            sock]
++           );
++         );
++         (* ... and the regular Unix permissions, in case qemu is
++          * running as another user.
++          *)
++         chmod sock 0o777;
++
++         { disk with s_qemu_uri = qemu_uri }
++     ) disks in
++
++    if verbose () then (
++      eprintf "vddk: tmpdir %s:\n%!" tmpdir;
++      ignore (Sys.command (sprintf "ls -laZ %s" (quote tmpdir)))
++    );
++
++    { source with s_disks = disks }
++end
++
++let input_libvirt_vddk = new input_libvirt_vddk
+diff --git a/v2v/input_libvirt_vddk.mli b/v2v/input_libvirt_vddk.mli
+new file mode 100644
+index 000000000..19a34c202
+--- /dev/null
++++ b/v2v/input_libvirt_vddk.mli
+@@ -0,0 +1,24 @@
++(* virt-v2v
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ *)
++
++(** [-i libvirt] when the source is VMware via nbdkit vddk plugin *)
++
++val input_libvirt_vddk : Types.vddk_options -> string option -> string option -> Xml.uri -> string -> Types.input
++(** [input_libvirt_vddk vddk_options password libvirt_uri parsed_uri guest]
++    creates and returns a {!Types.input} object specialized for reading
++    the guest disks using the nbdkit vddk plugin. *)
+diff --git a/v2v/types.ml b/v2v/types.ml
+index 3efb9ff46..4f9205aa0 100644
+--- a/v2v/types.ml
++++ b/v2v/types.ml
+@@ -472,6 +472,18 @@ type root_choice = AskRoot | SingleRoot | FirstRoot | RootDev of string
+ 
+ type output_allocation = Sparse | Preallocated
+ 
++type vddk_options = {
++    vddk_libdir : string;
++    vddk_config : string option;
++    vddk_cookie : string option;
++    vddk_nfchostport : string option;
++    vddk_port : string option;
++    vddk_snapshot : string option;
++    vddk_thumbprint : string option;
++    vddk_transports : string option;
++    vddk_vimapiver : string option;
++}
++
+ class virtual input = object
+   method precheck () = ()
+   method virtual as_options : string
+diff --git a/v2v/types.mli b/v2v/types.mli
+index 2880546ae..087a03702 100644
+--- a/v2v/types.mli
++++ b/v2v/types.mli
+@@ -328,6 +328,19 @@ type root_choice = AskRoot | SingleRoot | FirstRoot | RootDev of string
+ type output_allocation = Sparse | Preallocated
+ (** Type of [-oa] (output allocation) option. *)
+ 
++type vddk_options = {
++    vddk_libdir : string;
++    vddk_config : string option;
++    vddk_cookie : string option;
++    vddk_nfchostport : string option;
++    vddk_port : string option;
++    vddk_snapshot : string option;
++    vddk_thumbprint : string option;
++    vddk_transports : string option;
++    vddk_vimapiver : string option;
++}
++(** Various options passed through to the nbdkit vddk plugin unmodified. *)
++
+ (** {2 Input object}
+ 
+     There is one of these used for the [-i] option. *)
+diff --git a/v2v/virt-v2v.pod b/v2v/virt-v2v.pod
+index 77b6f514f..d713d0b1f 100644
+--- a/v2v/virt-v2v.pod
++++ b/v2v/virt-v2v.pod
+@@ -514,6 +514,35 @@ boot an operating system from the first VirtIO disk.  Specifically,
+ F</boot> must be on the first VirtIO disk, and it cannot chainload an
+ OS which is not in the first VirtIO disk.
+ 
++=item B<--vddk> LIBDIR
++
++Enable VDDK input from VMware vCenter or ESXi.  C<LIBDIR> is the top
++directory of the VDDK library.  This directory should I<contain>
++subdirectories called F<include>, F<lib64> etc., but do not include
++F<lib64> actually in the parameter.
++
++See L</INPUT FROM VDDK> below for details.
++
++=item B<--vddk-config> FILENAME
++
++=item B<--vddk-cookie> COOKIE
++
++=item B<--vddk-nfchostport> PORT
++
++=item B<--vddk-port> PORT
++
++=item B<--vddk-snapshot> SNAPSHOT-MOREF
++
++=item B<--vddk-thumbprint> xx:xx:xx:...
++
++=item B<--vddk-transports> MODE:MODE:...
++
++=item B<--vddk-vimapiver> APIVER
++
++When using VDDK mode, these options are passed unmodified to the
++L<nbdkit(1)> VDDK plugin.  Please refer to L<nbdkit-vddk-plugin(1)>.
++Only I<--vddk-thumbprint> is required, the others are optional.
++
+ =item B<--vdsm-compat=0.10>
+ 
+ =item B<--vdsm-compat=1.1>
+@@ -1270,6 +1299,130 @@ Perform the conversion of the guest using virt-v2v:
+ 
+ Remove the F<guest.xml> and F<guest-disk*> files.
+ 
++=head1 INPUT FROM VDDK
++
++Virt-v2v is able to import guests using VMware’s proprietary VDDK
++library (a.k.a. VixDiskLib).
++
++=head2 VDDK: PREREQUISITES
++
++=over 4
++
++=item 1.
++
++As the VDDK library is not open source, and the license of this
++library does not permit redistribution or commercial use, you must
++obtain VDDK yourself and satisfy yourself that your usage of the
++library is permitted by the license.
++
++=item 2.
++
++You must also compile nbdkit, enabling the VDDK plugin.  At least
++nbdkit E<ge> 1.1.14 is required, but it is usually best to compile
++from the git tree.
++
++=over 4
++
++=item *
++
++L<https://github.com/libguestfs/nbdkit>
++
++=item *
++
++L<https://github.com/libguestfs/nbdkit/tree/master/plugins/vddk>
++
++=back
++
++=item 3.
++
++You can run nbdkit from its source directory without needing to
++install it.  Set C<$PATH> to include the nbdkit top build directory
++(the directory containing a shell script called F<nbdkit>):
++
++ export PATH=/path/to/nbdkit:$PATH
++
++=item 4.
++
++You must find the SSL "thumbprint" of your VMware server.  How to do
++this is explained in L<nbdkit-vddk-plugin(1)>, also available at the
++link given in item 2 above.
++
++=item 5.
++
++VDDK imports require a feature added in libvirt E<ge> 3.7.
++
++=back
++
++=head2 VDDK: URI
++
++Construct the correct C<vpx://> (for vCenter) or C<esx://> (for ESXi)
++URL.  It will look something like these:
++
++ vpx://root@vcenter.example.com/Datacenter/esxi
++
++ esx://root@esxi.example.com
++
++To verify that you have the correct URL, use the L<virsh(1)> command
++to list the guests on the server:
++
++ $ virsh -c 'vpx://root@vcenter.example.com/Datacenter/esxi' list --all
++ Enter root's password for vcenter.example.com: ***
++ 
++  Id    Name                           State
++ ----------------------------------------------------
++  -     Fedora 20                      shut off
++  -     Windows 2003                   shut off
++
++If you get an error "Peer certificate cannot be authenticated with
++given CA certificates" or similar, then you can either import the
++vCenter host’s certificate, or bypass signature verification by adding
++the C<?no_verify=1> flag:
++
++ $ virsh -c 'vpx://root@vcenter.example.com/Datacenter/esxi?no_verify=1' list --all
++
++You should also try dumping the metadata from any guest on your
++server, like this:
++
++ $ virsh -c 'vpx://root@vcenter.example.com/Datacenter/esxi' dumpxml "Windows 2003"
++ <domain type='vmware'>
++   <name>Windows 2003</name>
++   [...]
++   <vmware:moref>vm-123</vmware:moref>
++ </domain>
++
++If C<E<lt>vmware:morefE<gt>> does not appear in the metadata, then you
++need to upgrade libvirt.
++
++B<If the above commands do not work, then virt-v2v is not going to
++work either>.  Fix your URI and/or your VMware server before
++continuing.
++
++=head2 VDDK: IMPORTING A GUEST
++
++To import a particular guest from vCenter server or ESXi hypervisor,
++use a command like the following, substituting the URI, guest name and
++SSL thumbprint:
++
++ $ export PATH=/path/to/nbdkit:$PATH
++ $ virt-v2v \
++     -ic 'vpx://root@vcenter.example.com/Datacenter/esxi?no_verify=1' \
++     --vddk /path/to/vmware-vix-disklib-distrib \
++     --vddk-thumbprint xx:xx:xx:... \
++     "Windows 2003" \
++     -o local -os /var/tmp
++
++Other options that you might need to add in rare circumstances include
++I<--vddk-config>, I<--vddk-cookie>, I<--vddk-nfchostport>,
++I<--vddk-port>, I<--vddk-snapshot>, I<--vddk-transports> and
++I<--vddk-vimapiver>, which are all explained in the
++L<nbdkit-vddk-plugin(1)> documentation.
++
++=head2 VDDK: DEBUGGING VDDK FAILURES
++
++The VDDK library can be operated in a verbose mode where it gives
++(very) verbose messages.  Use ‘virt-v2v -v -x’ as usual to enable
++verbose messages.
++
+ =head1 INPUT FROM XEN
+ 
+ Virt-v2v is able to import Xen guests from RHEL 5 Xen hosts.
+@@ -2032,6 +2185,8 @@ L<virt-v2v-copy-to-local(1)>,
+ L<virt-v2v-test-harness(1)>,
+ L<engine-image-uploader(8)>,
+ L<import-to-ovirt.pl|http://git.annexia.org/?p=import-to-ovirt.git>,
++L<nbdkit(1)>,
++L<nbdkit-vddk-plugin(1)>,
+ L<http://libguestfs.org/>.
+ 
+ =head1 AUTHORS
+-- 
+2.14.3
+

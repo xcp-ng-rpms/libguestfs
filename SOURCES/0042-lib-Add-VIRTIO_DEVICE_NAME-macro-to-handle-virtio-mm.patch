@@ -1,0 +1,155 @@
+From eddfb0a765e0246d0fb397414f32403f055488a3 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 18 May 2017 15:59:38 +0100
+Subject: [PATCH] lib: Add VIRTIO_DEVICE_NAME macro to handle virtio-mmio vs
+ CCW vs virtio-PCI.
+
+(cherry picked from commit a5bd493e3f90945cb8e913f9c680bedbdf26aaaa)
+
+PT: the VIRTIO_DEVICE_NAME macros are left in guestfs-internal.h, since
+the VIRTIO_* macros were used in other places than launch-direct.c.
+---
+ lib/guestfs-internal.h | 22 +++++-----------------
+ lib/launch-direct.c    | 16 ++++++++--------
+ lib/launch-libvirt.c   |  2 +-
+ lib/qemu.c             |  2 +-
+ 4 files changed, 15 insertions(+), 27 deletions(-)
+
+diff --git a/lib/guestfs-internal.h b/lib/guestfs-internal.h
+index f035e0931..d962aacd4 100644
+--- a/lib/guestfs-internal.h
++++ b/lib/guestfs-internal.h
+@@ -142,27 +142,15 @@
+ /* Maximum size of Windows explorer.exe.  2.6MB on Windows 7. */
+ #define MAX_WINDOWS_EXPLORER_SIZE (4 * 1000 * 1000)
+ 
+-/* Differences in device names on ARMv7 (virtio-mmio), s/390x (CCW) vs
+- * normal hardware with PCI.
++/* Differences in qemu device names on ARMv7 (virtio-mmio), s/390x
++ * (CCW) vs normal hardware with PCI.
+  */
+ #if defined(__arm__)
+-#define VIRTIO_BLK "virtio-blk-device"
+-#define VIRTIO_SCSI "virtio-scsi-device"
+-#define VIRTIO_SERIAL "virtio-serial-device"
+-#define VIRTIO_NET "virtio-net-device"
+-#define VIRTIO_RNG "virtio-rng-device"
++#define VIRTIO_DEVICE_NAME(type) type "-device"
+ #elif defined(__s390x__)
+-#define VIRTIO_BLK "virtio-blk-ccw"
+-#define VIRTIO_SCSI "virtio-scsi-ccw"
+-#define VIRTIO_SERIAL "virtio-serial-ccw"
+-#define VIRTIO_NET "virtio-net-ccw"
+-#define VIRTIO_RNG "virtio-rng-ccw"
++#define VIRTIO_DEVICE_NAME(type) type "-ccw"
+ #else
+-#define VIRTIO_BLK "virtio-blk-pci"
+-#define VIRTIO_SCSI "virtio-scsi-pci"
+-#define VIRTIO_SERIAL "virtio-serial-pci"
+-#define VIRTIO_NET "virtio-net-pci"
+-#define VIRTIO_RNG "virtio-rng-pci"
++#define VIRTIO_DEVICE_NAME(type) type "-pci"
+ #endif
+ 
+ /* Machine types. */
+diff --git a/lib/launch-direct.c b/lib/launch-direct.c
+index c8841bfe4..0fef05927 100644
+--- a/lib/launch-direct.c
++++ b/lib/launch-direct.c
+@@ -349,7 +349,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+    */
+   if (guestfs_int_qemu_supports (g, data->qemu_data, "-global")) {
+     ADD_CMDLINE ("-global");
+-    ADD_CMDLINE (VIRTIO_BLK ".scsi=off");
++    ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-blk") ".scsi=off");
+   }
+ 
+   if (guestfs_int_qemu_supports (g, data->qemu_data, "-nodefconfig"))
+@@ -463,11 +463,11 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+    * when needing entropy.
+    */
+   if (guestfs_int_qemu_supports_device (g, data->qemu_data,
+-                                        VIRTIO_RNG)) {
++                                        VIRTIO_DEVICE_NAME ("virtio-rng"))) {
+     ADD_CMDLINE ("-object");
+     ADD_CMDLINE ("rng-random,filename=/dev/urandom,id=rng0");
+     ADD_CMDLINE ("-device");
+-    ADD_CMDLINE (VIRTIO_RNG ",rng=rng0");
++    ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-rng") ",rng=rng0");
+   }
+ 
+   /* Add drives */
+@@ -477,7 +477,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+   if (virtio_scsi) {
+     /* Create the virtio-scsi bus. */
+     ADD_CMDLINE ("-device");
+-    ADD_CMDLINE (VIRTIO_SCSI ",id=scsi");
++    ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-scsi") ",id=scsi");
+   }
+ 
+   ITER_DRIVES (g, i, drv) {
+@@ -564,7 +564,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+       ADD_CMDLINE ("-drive");
+       ADD_CMDLINE_PRINTF ("%s,if=none" /* sic */, param);
+       ADD_CMDLINE ("-device");
+-      ADD_CMDLINE_PRINTF (VIRTIO_BLK ",drive=hd%zu", i);
++      ADD_CMDLINE_PRINTF (VIRTIO_DEVICE_NAME ("virtio-blk") ",drive=hd%zu", i);
+     }
+   }
+ 
+@@ -581,7 +581,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+     }
+     else {
+       ADD_CMDLINE ("-device");
+-      ADD_CMDLINE (VIRTIO_BLK ",drive=appliance");
++      ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-blk") ",drive=appliance");
+     }
+ 
+     appliance_dev = make_appliance_dev (g, virtio_scsi);
+@@ -589,7 +589,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+ 
+   /* Create the virtio serial bus. */
+   ADD_CMDLINE ("-device");
+-  ADD_CMDLINE (VIRTIO_SERIAL);
++  ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-serial"));
+ 
+   /* Create the serial console. */
+ #ifndef __s390x__
+@@ -626,7 +626,7 @@ launch_direct (guestfs_h *g, void *datav, const char *arg)
+     ADD_CMDLINE ("-netdev");
+     ADD_CMDLINE ("user,id=usernet,net=169.254.0.0/16");
+     ADD_CMDLINE ("-device");
+-    ADD_CMDLINE (VIRTIO_NET ",netdev=usernet");
++    ADD_CMDLINE (VIRTIO_DEVICE_NAME ("virtio-net") ",netdev=usernet");
+   }
+ 
+   ADD_CMDLINE ("-append");
+diff --git a/lib/launch-libvirt.c b/lib/launch-libvirt.c
+index 49bd40583..d10c7cb40 100644
+--- a/lib/launch-libvirt.c
++++ b/lib/launch-libvirt.c
+@@ -1803,7 +1803,7 @@ construct_libvirt_xml_qemu_cmdline (guestfs_h *g,
+       } end_element ();
+ 
+       start_element ("qemu:arg") {
+-        attribute ("value", VIRTIO_NET ",netdev=usernet");
++        attribute ("value", VIRTIO_DEVICE_NAME ("virtio-net") ",netdev=usernet");
+       } end_element ();
+     }
+ 
+diff --git a/lib/qemu.c b/lib/qemu.c
+index c9debe937..887e31bc4 100644
+--- a/lib/qemu.c
++++ b/lib/qemu.c
+@@ -619,7 +619,7 @@ guestfs_int_qemu_supports_virtio_scsi (guestfs_h *g, struct qemu_data *data,
+     if (old_or_broken_virtio_scsi (qemu_version))
+       data->virtio_scsi = 2;
+     else {
+-      r = guestfs_int_qemu_supports_device (g, data, VIRTIO_SCSI);
++      r = guestfs_int_qemu_supports_device (g, data, VIRTIO_DEVICE_NAME ("virtio-scsi"));
+       if (r > 0)
+         data->virtio_scsi = 1;
+       else if (r == 0)
+-- 
+2.14.3
+

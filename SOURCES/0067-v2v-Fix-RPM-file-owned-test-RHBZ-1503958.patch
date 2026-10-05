@@ -1,0 +1,126 @@
+From 35372c4b210bc49969bf96e7a17897ec29ba4625 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 19 Oct 2017 12:05:43 +0100
+Subject: [PATCH] v2v: Fix RPM file owned test (RHBZ#1503958).
+
+Linux.file_owner is not used by any other function, so remove it.
+
+Linux.is_file_owned is only used when removing kmod-xenpv on old RHEL
+releases, and so is only required to work for RPM.
+
+The old file_owner/is_file_owned functions were completely broken for
+the RPM case.  This replaces them with a simpler, working
+implementation of is_file_owned only.
+
+Thanks: Ming Xie for finding and reporting the original bug.
+(cherry picked from commit e6bc59a7d46707f5037afc8a73206d2773c3fccd)
+---
+ v2v/linux.ml  | 61 ++++++++++++++++++++++++++---------------------------------
+ v2v/linux.mli |  3 ---
+ 2 files changed, 27 insertions(+), 37 deletions(-)
+
+diff --git a/v2v/linux.ml b/v2v/linux.ml
+index fad9b0c61..11b0e2cbf 100644
+--- a/v2v/linux.ml
++++ b/v2v/linux.ml
+@@ -98,7 +98,7 @@ let file_list_of_package (g : Guestfs.guestfs) inspect app =
+     error (f_"don't know how to get list of files from package using %s")
+       format
+ 
+-let rec file_owner (g : G.guestfs) { i_package_format = package_format } path =
++let is_file_owned (g : G.guestfs) { i_package_format = package_format } path =
+   match package_format with
+   | "deb" ->
+       (* With dpkg usually the directories are owned by all the packages
+@@ -108,48 +108,41 @@ let rec file_owner (g : G.guestfs) { i_package_format = package_format } path =
+        *)
+       let cmd = [| "dpkg"; "-S"; path |] in
+       debug "%s" (String.concat " " (Array.to_list cmd));
+-      let lines =
+-        try g#command_lines cmd
+-        with Guestfs.Error msg as exn ->
+-          if String.find msg "no path found matching pattern" >= 0 then
+-            raise Not_found
+-          else
+-            raise exn in
+-      if Array.length lines = 0 then
+-        error (f_"internal error: file_owner: dpkg command returned no output");
+-      let line = lines.(0) in
+-      let line =
+-        try String.sub line 0 (String.rindex line ':')
+-        with Invalid_argument _ ->
+-          error (f_"internal error: file_owner: invalid dpkg output: '%s'")
+-                line in
+-      fst (String.split "," line)
+-
+-  | "rpm" ->
+-      (* Although it is possible in RPM for multiple packages to own
+-       * a file, this deliberately only returns one package.
+-       *)
+-      let cmd = [| "rpm"; "-qf"; "--qf"; "%{NAME}\\n"; path |] in
+-      debug "%s" (String.concat " " (Array.to_list cmd));
+       (try
+-         let pkgs = g#command_lines cmd in
+-         pkgs.(0)
++         let lines = g#command_lines cmd in
++         if Array.length lines = 0 then
++           error (f_"internal error: is_file_owned: dpkg command returned no output");
++         (* Just check the output looks something like "pkg: filename". *)
++         if String.find lines.(0) ": " >= 0 then
++           true
++         else
++           error (f_"internal error: is_file_owned: unexpected output from dpkg command: %s")
++                 lines.(0)
+        with Guestfs.Error msg as exn ->
+-         if String.find msg "is not owned" >= 0 then
+-           raise Not_found
++         if String.find msg "no path found matching pattern" >= 0 then
++           false
+          else
+            raise exn
+-       | Invalid_argument _ (* pkgs.(0) raises index out of bounds *) ->
+-         error (f_"internal error: file_owner: rpm command returned no output")
+       )
+ 
++  | "rpm" ->
++     (* Run rpm -qf and print a magic string if the file is owned.
++      * If not owned, rpm will print "... is not owned by any package"
++      * and exit with an error.  Unfortunately the string is sent to
++      * stdout, so here we ignore the exit status of rpm and just
++      * look for one of the two strings.
++      *)
++     let magic = "FILE_OWNED_TEST" in
++     let cmd = sprintf "rpm -qf --qf %s %s 2>&1 ||:"
++                       (quote (magic ^ "\n")) (quote path) in
++     let r = g#sh cmd in
++     if String.find r magic >= 0 then true
++     else if String.find r "is not owned" >= 0 then false
++     else failwithf "RPM file owned test failed: %s" r
++
+   | format ->
+     error (f_"don't know how to find file owner using %s") format
+ 
+-and is_file_owned g inspect path =
+-  try ignore (file_owner g inspect path); true
+-  with Not_found -> false
+-
+ let is_package_manager_save_file filename =
+   (* Recognized suffixes of package managers. *)
+   let suffixes = [ ".dpkg-old"; ".dpkg-new"; ".rpmsave"; ".rpmnew"; ] in
+diff --git a/v2v/linux.mli b/v2v/linux.mli
+index 705073644..08146a460 100644
+--- a/v2v/linux.mli
++++ b/v2v/linux.mli
+@@ -29,9 +29,6 @@ val remove : Guestfs.guestfs -> Types.inspect -> string list -> unit
+ val file_list_of_package : Guestfs.guestfs -> Types.inspect -> Guestfs.application2 -> string list
+ (** Return list of files owned by package. *)
+ 
+-val file_owner : Guestfs.guestfs -> Types.inspect -> string -> string
+-(** Return the name of the package that owns a file. *)
+-
+ val is_file_owned : Guestfs.guestfs -> Types.inspect -> string -> bool
+ (** Returns true if the file is owned by an installed package. *)
+ 
+-- 
+2.14.3
+

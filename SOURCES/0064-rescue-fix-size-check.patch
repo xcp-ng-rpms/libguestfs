@@ -1,0 +1,30 @@
+From ab6cefa227e23008eda69f8e7390d2eaed376d5c Mon Sep 17 00:00:00 2001
+From: Pino Toscano <ptoscano@redhat.com>
+Date: Mon, 23 Oct 2017 17:42:03 +0200
+Subject: [PATCH] rescue: fix size check
+
+Compare it to the right variable, not to the pointer itself.
+
+Fixes commit 3637c42f4e521eb647d7dfae7f48eb1689d0af54.
+
+(cherry picked from commit 0998e3f1cdf9eb441ea1f45e45860feac47fccd8)
+---
+ rescue/escape.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/rescue/escape.c b/rescue/escape.c
+index f7f7d84c4..d6dc9d329 100644
+--- a/rescue/escape.c
++++ b/rescue/escape.c
+@@ -49,7 +49,7 @@ parse_escape_key (const char *arg)
+     return 0;
+ 
+   len = strlen (arg);
+-  if (arg == 0)
++  if (len == 0)
+     return -1;
+ 
+   switch (arg[0]) {
+-- 
+2.14.3
+
